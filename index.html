@@ -462,7 +462,10 @@ const db = getFirestore(app);
 // Attendance states cycle
 const ATT_STATES = ['present','late','sick','leave','absent'];
 const ATT_LABELS = {present:'出勤',late:'遲到',sick:'病假',leave:'事假',absent:'曠課'};
+const ATT_EMOJI  = {present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'❌'};
+const ATT_BG     = {present:'rgba(86,204,178,.2)',late:'rgba(255,159,67,.2)',sick:'rgba(86,130,204,.2)',leave:'rgba(192,132,252,.2)',absent:'rgba(255,107,107,.2)'};
 const ATT_CLASSES = {present:'att-present',late:'att-late',sick:'att-sick',leave:'att-leave',absent:'att-absent'};
+const ATT_TAG    = {present:'tag-green',late:'tag-orange',sick:'tag-blue',leave:'tag-purple',absent:'tag-red'};
 
 let currentUser = null;
 let myClasses = [];
@@ -807,7 +810,6 @@ async function loadEntries(){
   }catch(e){console.error(e);}
 }
 
-const ATT_TAG={present:'tag-green',late:'tag-orange',sick:'tag-blue',leave:'tag-purple',absent:'tag-red'};
 
 function renderHistory(){
   const el=document.getElementById('historyList');
@@ -1189,8 +1191,7 @@ window.generateStudentReport = function() {
     byClass[k].push(e);
   });
 
-  const ATT_LABELS_L={present:'出勤',late:'遲到',sick:'病假',leave:'事假',absent:'曠課'};
-  const normAtt=(val)=>{
+    const normAtt=(val)=>{
     if(val===true||val==='present') return 'present';
     if(val===false||val==='absent') return 'absent';
     if(['present','late','sick','leave','absent'].includes(val)) return val;
@@ -1258,7 +1259,7 @@ window.generateStudentReport = function() {
       const scoreColor=pct===null?'var(--muted)':pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
       html+=`<tr>
         <td style="padding:8px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${attBg[st]}">${attEmoji[st]} <span style="font-size:11px">${ATT_LABELS_L[st]}</span></td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${attBg[st]}">${attEmoji[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scoreColor}">${hasScore?`${score}/${max}<br><span style="font-size:11px">${pct}%</span>`:'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayProgress||'—'}</td>
@@ -1477,9 +1478,6 @@ window.confirmDelete = async function() {
 };
 
 // ── STUDENT SEARCH (cross-teacher) ──
-const ATT_LABELS = {present:'出勤',late:'遲到',sick:'病假',leave:'事假',absent:'曠課'};
-const ATT_EMOJI  = {present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'❌'};
-const ATT_BG     = {present:'rgba(86,204,178,.2)',late:'rgba(255,159,67,.2)',sick:'rgba(86,130,204,.2)',leave:'rgba(192,132,252,.2)',absent:'rgba(255,107,107,.2)'};
 
 function normAtt(v){
   if(v===true||v==='present') return 'present';
@@ -1654,9 +1652,6 @@ window.printStudentReport=function(){
 
 
 // ── STUDENT SEARCH (cross-teacher) ──
-const ATT_LABELS = {present:'出勤',late:'遲到',sick:'病假',leave:'事假',absent:'曠課'};
-const ATT_EMOJI  = {present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'❌'};
-const ATT_BG     = {present:'rgba(86,204,178,.2)',late:'rgba(255,159,67,.2)',sick:'rgba(86,130,204,.2)',leave:'rgba(192,132,252,.2)',absent:'rgba(255,107,107,.2)'};
 
 function normAtt(v){
   if(v===true||v==='present') return 'present';
