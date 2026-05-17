@@ -1283,28 +1283,35 @@ window.generateStudentReport = function() {
 
 
 // ══ ADMIN FUNCTIONS ══
+window.adminSwitchTab = function(name, el) {
+  ['overview','entries','stats','student','accounts'].forEach(t=>document.getElementById('admin-tab-'+t).style.display='none');
+  document.querySelectorAll('#adminPage .tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('admin-tab-'+name).style.display='block';
+  el.classList.add('active');
+  if(name==='entries') adminRenderEntries();
+  if(name==='stats') adminRenderStats();
+  if(name==='accounts') renderTeachers();
+  if(name==='student') renderAdminStudentPick();
+};
+
 async function adminLoadAll() {
   showLoading('載入資料...');
   try {
-    // Load entries
-    const eq = query(collection(db,'entries'), orderBy('savedAt','desc'));
-    const esnap = await getDocs(eq);
-    allEntries = esnap.docs.map(d => ({_id:d.id,...d.data()}));
-
-    // Load teachers
+    const esnap = await getDocs(collection(db,'entries'));
+    allEntries = esnap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
     const tsnap = await getDocs(collection(db,'teachers'));
-    teachers = tsnap.docs.map(d => ({_id:d.id,...d.data()}));
-
-    renderOverview();
-    populateFilters();
+    teachers = tsnap.docs.map(d=>({_id:d.id,...d.data()}));
+    adminRenderOverview();
+    adminPopulateFilters();
+    renderAdminStudentPick();
   } catch(e) { showToast('❌ 載入失敗：'+e.message,'error'); console.error(e); }
   hideLoading();
 }
 
-window.adminRefresh = async function() { await loadAll(); showToast('🔄 資料已更新'); };
+window.adminRefresh = async function() { await adminLoadAll(); showToast('🔄 資料已更新'); };
 
 // ── OVERVIEW ──
-function renderOverview() {
+function adminRenderOverview() {
   const teacherNames = [...new Set(allEntries.map(e=>e.teacherName))];
   const totalAbsent = allEntries.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
   const totalHwMiss = allEntries.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
@@ -1319,7 +1326,7 @@ function renderOverview() {
     : '<div class="empty"><div class="empty-icon">📭</div><div>尚無日誌</div></div>';
 }
 
-function populateFilters() {
+function adminPopulateFilters() {
   const classes = [...new Set(allEntries.map(e=>e.className).filter(Boolean))].sort();
   document.getElementById('filterClass').innerHTML = '<option value="">所有班級</option>' + classes.map(c=>`<option>${c}</option>`).join('');
 
