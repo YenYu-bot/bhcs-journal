@@ -77,7 +77,8 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
 .student-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
 .hw-chip{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;cursor:pointer;user-select:none;transition:all .15s;}
 .hw-done{background:rgba(86,204,178,.1);border:1px solid rgba(86,204,178,.2);}
-.hw-miss{background:rgba(255,209,102,.1);border:1px solid rgba(255,209,102,.3);}
+.hw-partial{background:rgba(255,159,67,.1);border:1px solid rgba(255,159,67,.3);}
+.hw-missing,.hw-miss{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);}
 .chip-name{font-size:14px;font-weight:700;}
 
 /* Score table */
@@ -472,7 +473,20 @@ let myClasses = [];
 let entries = [];
 let currentStudents = [];
 let attendance = {}; // { name: 'present'|'late'|'sick'|'leave'|'absent' }
-let homework = {};
+let homework = {}; // { name: 'done'|'partial'|'missing' }，舊資料 true/false 會自動相容
+
+const HW_STATES = ['done','partial','missing'];
+const HW_LABELS = {done:'已完成',partial:'部分缺繳',missing:'缺繳'};
+const HW_EMOJI = {done:'✅',partial:'🟠',missing:'❌'};
+const HW_CLASSES = {done:'hw-done',partial:'hw-partial',missing:'hw-missing'};
+const HW_TAG = {done:'tag-green',partial:'tag-orange',missing:'tag-red'};
+const HW_BG = {done:'rgba(86,204,178,.15)',partial:'rgba(255,159,67,.15)',missing:'rgba(255,107,107,.15)'};
+function normHw(v){
+  if (v === false || v === 'missing' || v === '缺繳') return 'missing';
+  if (v === 'partial' || v === '部分缺繳') return 'partial';
+  return 'done';
+}
+function isHwDone(v){ return normHw(v) === 'done'; }
 
 // ══ LOGIN ══
 const ADMIN_CREDS = { user: 'admin', password: 'admin888' };
@@ -626,7 +640,7 @@ window.onClassSelect = function() {
   if(!cls){document.getElementById('journalForm').style.display='none';return;}
   currentStudents=[...cls.students];
   attendance={};homework={};
-  currentStudents.forEach(s=>{attendance[s]='present';homework[s]=true;});
+  currentStudents.forEach(s=>{attendance[s]='present';homework[s]='done';});
   document.getElementById('selectedClassInfo').style.display='block';
   document.getElementById('selectedClassInfo').textContent=`班級：${cls.name}　學生：${cls.students.join('、')}`;
   document.getElementById('journalForm').style.display='block';
@@ -667,13 +681,20 @@ window.cycleAtt = function(s) {
 };
 
 function renderHomework() {
-  document.getElementById('homeworkGrid').innerHTML = currentStudents.map(s=>`
-    <div class="hw-chip ${homework[s]?'hw-done':'hw-miss'}" onclick="toggleH('${s}')">
-      <span style="font-size:18px">${homework[s]?'✅':'⚠️'}</span>
-      <span class="chip-name">${s}</span>
-    </div>`).join('');
+  document.getElementById('homeworkGrid').innerHTML = currentStudents.map(s=>{
+    const st = normHw(homework[s]);
+    return `<div class="hw-chip ${HW_CLASSES[st]}" onclick="toggleH('${s}')">
+      <span style="font-size:18px">${HW_EMOJI[st]}</span>
+      <span class="chip-name" style="flex:1">${s}</span>
+      <span style="font-size:11px;font-weight:700;color:var(--muted)">${HW_LABELS[st]}</span>
+    </div>`;
+  }).join('');
 }
-window.toggleH=function(s){homework[s]=!homework[s];renderHomework();};
+window.toggleH=function(s){
+  const idx = HW_STATES.indexOf(normHw(homework[s]));
+  homework[s] = HW_STATES[(idx + 1) % HW_STATES.length];
+  renderHomework();
+};
 
 function renderScoreTable() {
   // Use index-based IDs to avoid collisions with Chinese/special characters
@@ -731,7 +752,7 @@ window.handlePhoto = async function(file) {
 本班學生名單：${cls.students.join('、')}
 出勤狀態說明：present=出勤、late=遲到、sick=病假、leave=事假、absent=曠課（若標示全到則全部為present）
 請回傳純JSON（不加markdown）：
-{"date":"MM/DD","weekday":"一二三四五六日之一","attendance":{"學生姓名":"present|late|sick|leave|absent"},"homeworkNotDone":["未繳作業學生"],"scores":{"姓名":數字或null},"maxScore":滿分數字,"todayProgress":"本日進度","todayHomework":"本日作業","nextExam":"下次考試","notes":"備註"}
+{"date":"MM/DD","weekday":"一二三四五六日之一","attendance":{"學生姓名":"present|late|sick|leave|absent"},"homeworkNotDone":["缺繳作業學生"],"homeworkPartial":["部分缺繳學生"],"scores":{"姓名":數字或null},"maxScore":滿分數字,"todayProgress":"本日進度","todayHomework":"本日作業","nextExam":"下次考試","notes":"備註"}
 只回傳JSON。`;
     const res=await fetch('https://api.openai.com/v1/chat/completions',{
       method:'POST',
@@ -752,7 +773,9 @@ window.handlePhoto = async function(file) {
       });
     }
     // apply homework
-    cls.students.forEach(s=>{homework[s]=!(parsed.homeworkNotDone||[]).includes(s);});
+    cls.students.forEach(s=>{
+      homework[s]=(parsed.homeworkNotDone||[]).includes(s) ? 'missing' : ((parsed.homeworkPartial||[]).includes(s) ? 'partial' : 'done');
+    });
     renderAttendance();renderHomework();renderScoreTable();
     setScores(parsed.scores||{},parsed.maxScore);
     document.getElementById('fDate').value=parsed.date||'';
@@ -821,7 +844,8 @@ function renderHistory(){
     const sickCount=sts.filter(s=>attMap[s]==='sick').length;
     const leaveCount=sts.filter(s=>attMap[s]==='leave').length;
     const absentCount=sts.filter(s=>attMap[s]==='absent').length;
-    const hwMiss=sts.filter(s=>e.homework[s]===false);
+    const hwPartial=sts.filter(s=>normHw(e.homework?.[s])==='partial');
+    const hwMiss=sts.filter(s=>normHw(e.homework?.[s])==='missing');
     const hasScores=sts.some(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null);
     const max=e.maxScore||100;
     return `<div class="entry-card">
@@ -836,14 +860,15 @@ function renderHistory(){
           ${lateCount?`<span class="ebadge ebadge-orange">遲到${lateCount}</span>`:''}
           ${sickCount?`<span class="ebadge ebadge-teal">病假${sickCount}</span>`:''}
           ${leaveCount?`<span class="ebadge ebadge-purple">事假${leaveCount}</span>`:''}
-          ${hwMiss.length?`<span class="ebadge ebadge-yellow">未繳${hwMiss.length}</span>`:''}
+          ${hwPartial.length?`<span class="ebadge ebadge-orange">部分${hwPartial.length}</span>`:''}
+          ${hwMiss.length?`<span class="ebadge ebadge-red">缺繳${hwMiss.length}</span>`:''}
           ${hasScores?`<span class="ebadge ebadge-teal">有成績</span>`:''}
           <span class="chevron" id="chev-${i}">▼</span>
         </div>
       </div>
       <div class="entry-body" id="body-${i}">
         <div class="detail-row"><div class="detail-label">出勤</div><div class="detail-value">${sts.map(s=>{const st=attMap[s]||'present';return `<span class="tag ${ATT_TAG[st]}">${s}：${ATT_LABELS[st]}</span>`;}).join('')}</div></div>
-        <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted);font-size:13px">全部繳交 ✅</span>'}</div></div>
+        <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${[...hwPartial.map(s=>`<span class="tag tag-orange">${s}：部分缺繳 🟠</span>`),...hwMiss.map(s=>`<span class="tag tag-red">${s}：缺繳 ❌</span>`)].join('') || '<span style="color:var(--muted);font-size:13px">全部已完成 ✅</span>'}</div></div>
         ${hasScores?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null).map(s=>{const pct=Math.round(e.scores[s]/max*100);const tc=pct>=90?'tag-green':pct>=60?'tag-yellow':'tag-red';return `<span class="tag ${tc}">${s}：${e.scores[s]}/${max}（${pct}%）</span>`;}).join('')}</div></div>`:''}
         ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value">${e.todayProgress}</div></div>`:''}
         ${e.todayHomework?`<div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${e.todayHomework}</div></div>`:''}
@@ -866,7 +891,7 @@ window.editEntry=function(i){
   if(cls){
     currentStudents=[...cls.students];
     attendance={...e.attendance};
-    homework={...e.homework};
+    homework=Object.fromEntries(currentStudents.map(s=>[s,normHw(e.homework?.[s])]));
     document.getElementById('selectedClassInfo').style.display='block';
     document.getElementById('selectedClassInfo').textContent=`班級：${cls.name}　學生：${cls.students.join('、')}`;
     document.getElementById('journalForm').style.display='block';
@@ -1035,15 +1060,18 @@ window.generateReport = function() {
         <thead><tr style="background:rgba(255,255,255,.06)">
           <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
           ${dates.map(d=>`<th style="padding:8px 6px;border:1px solid var(--border);min-width:52px;text-align:center">${d}</th>`).join('')}
-          <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">已繳</th>
-          <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">未繳</th>
+          <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">已完成</th>
+          <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">部分缺繳</th>
+          <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">缺繳</th>
         </tr></thead><tbody>`;
       allStudents.forEach(s=>{
-        const done=es.filter(e=>e.homework[s]!==false).length;
-        const miss=es.length-done;
+        const done=es.filter(e=>normHw(e.homework?.[s])==='done').length;
+        const partial=es.filter(e=>normHw(e.homework?.[s])==='partial').length;
+        const miss=es.filter(e=>normHw(e.homework?.[s])==='missing').length;
         t+=`<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
-          ${es.map(e=>{const ok=e.homework[s]!==false;return `<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${ok?'rgba(86,204,178,.2)':'rgba(255,107,107,.2)'};font-size:14px">${ok?'✅':'⚠️'}</td>`;}).join('')}
+          ${es.map(e=>{const st=normHw(e.homework?.[s]);return `<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${HW_BG[st]};font-size:14px" title="${HW_LABELS[st]}">${HW_EMOJI[st]}</td>`;}).join('')}
           <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:#56ccb2">${done}</td>
+          <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${partial>0?'#ff9f43':'var(--muted)'}">${partial}</td>
           <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${miss>0?'#ff6b6b':'var(--muted)'}">${miss}</td>
         </tr>`;
       });
@@ -1213,7 +1241,7 @@ window.generateStudentReport = function() {
   html+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;">`;
   const totalPresent=studentEntries.filter(e=>normAtt(e.attendance?.[name])==='present').length;
   const totalAbsent=studentEntries.filter(e=>normAtt(e.attendance?.[name])!=='present').length;
-  const totalHwDone=studentEntries.filter(e=>e.homework?.[name]!==false).length;
+  const totalHwDone=studentEntries.filter(e=>isHwDone(e.homework?.[name])).length;
   const totalHwMiss=studentEntries.length-totalHwDone;
   const scoreList=studentEntries.filter(e=>e.scores?.[name]!==''&&e.scores?.[name]!=null);
   const avgPct=scoreList.length?Math.round(scoreList.reduce((a,e)=>a+e.scores[name]/(e.maxScore||100)*100,0)/scoreList.length):null;
@@ -1228,7 +1256,7 @@ window.generateStudentReport = function() {
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center;">
       <div style="font-size:24px;font-weight:900;color:${totalHwMiss>0?'var(--yellow)':'var(--teal)'}">${totalHwDone}/${studentEntries.length}</div>
-      <div style="font-size:12px;color:var(--muted)">作業繳交</div>
+      <div style="font-size:12px;color:var(--muted)">作業已完成</div>
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center;">
       <div style="font-size:24px;font-weight:900;color:${avgPct===null?'var(--muted)':avgPct>=90?'var(--teal)':avgPct>=60?'var(--yellow)':'var(--red)'}">${avgPct!==null?avgPct+'%':'—'}</div>
@@ -1251,7 +1279,7 @@ window.generateStudentReport = function() {
       </tr></thead><tbody>`;
     es.forEach(e=>{
       const st=normAtt(e.attendance?.[name]);
-      const hwOk=e.homework?.[name]!==false;
+      const hwSt=normHw(e.homework?.[name]);
       const score=e.scores?.[name];
       const hasScore=score!==''&&score!=null;
       const max=e.maxScore||100;
@@ -1260,7 +1288,7 @@ window.generateStudentReport = function() {
       html+=`<tr>
         <td style="padding:8px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${attBg[st]}">${attEmoji[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${HW_BG[hwSt]}">${HW_EMOJI[hwSt]} <span style="font-size:11px">${HW_LABELS[hwSt]}</span></td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scoreColor}">${hasScore?`${score}/${max}<br><span style="font-size:11px">${pct}%</span>`:'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayProgress||'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayHomework||'—'}</td>
@@ -1315,12 +1343,12 @@ window.adminRefresh = async function() { await adminLoadAll(); showToast('🔄 �
 function adminRenderOverview() {
   const teacherNames = [...new Set(allEntries.map(e=>e.teacherName))];
   const totalAbsent = allEntries.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
-  const totalHwMiss = allEntries.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
+  const totalHwMiss = allEntries.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>normHw(v)==='missing').length,0);
   document.getElementById('summaryGrid').innerHTML = `
     <div class="summary-card"><div class="summary-num" style="color:var(--teal)">${allEntries.length}</div><div class="summary-lbl">總日誌數</div></div>
     <div class="summary-card"><div class="summary-num" style="color:var(--purple)">${teachers.length}</div><div class="summary-lbl">老師人數</div></div>
     <div class="summary-card"><div class="summary-num" style="color:var(--red)">${totalAbsent}</div><div class="summary-lbl">累計缺席次</div></div>
-    <div class="summary-card"><div class="summary-num" style="color:var(--yellow)">${totalHwMiss}</div><div class="summary-lbl">累計未繳次</div></div>`;
+    <div class="summary-card"><div class="summary-num" style="color:var(--yellow)">${totalHwMiss}</div><div class="summary-lbl">累計缺繳次</div></div>`;
   const recent = allEntries.slice(0,8);
   document.getElementById('recentList').innerHTML = recent.length
     ? recent.map((e,i) => entryCard(e,'r'+i)).join('')
@@ -1352,20 +1380,21 @@ window.adminRenderEntries = function() {
 function entryCard(e, prefix) {
   const sts = e.students||Object.keys(e.attendance||{});
   const absent = sts.filter(s=>!e.attendance[s]);
-  const hwMiss = sts.filter(s=>e.homework[s]===false);
+  const hwMiss = sts.filter(s=>normHw(e.homework?.[s])==='missing');
   const hasScores = sts.some(s=>e.scores?.[s]!=='');
   return `<div class="entry-card">
     <div class="entry-header" onclick="toggleE('${prefix}')">
       <div><span class="entry-date">${e.date}</span><span class="entry-teacher">${e.teacherName}</span><span style="color:#c084fc;font-size:12px;margin-left:6px;font-weight:700">${e.className||''}</span><span class="entry-weekday"> · 星期${e.weekday} · ${sts.length}人</span></div>
       <div class="entry-badges">
         ${absent.length?`<span class="badge badge-red">缺${absent.length}</span>`:''}
-        ${hwMiss.length?`<span class="badge badge-yellow">未繳${hwMiss.length}</span>`:''}
+        ${hwPartial.length?`<span class="badge badge-yellow">部分${hwPartial.length}</span>`:''}
+        ${hwMiss.length?`<span class="badge badge-red">缺繳${hwMiss.length}</span>`:''}
         <span class="chevron" id="chev-${prefix}">▼</span>
       </div>
     </div>
     <div class="entry-body" id="body-${prefix}">
       <div class="detail-row"><div class="detail-label">出缺勤</div><div class="detail-value">${sts.map(s=>`<span class="tag ${e.attendance[s]?'tag-green':'tag-red'}">${s}</span>`).join('')}</div></div>
-      <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted);font-size:13px">全部繳交 ✅</span>'}</div></div>
+      <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${[...hwPartial.map(s=>`<span class="tag tag-orange">${s}：部分缺繳 🟠</span>`),...hwMiss.map(s=>`<span class="tag tag-red">${s}：缺繳 ❌</span>`)].join('') || '<span style="color:var(--muted);font-size:13px">全部已完成 ✅</span>'}</div></div>
       ${hasScores?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!=="").map(s=>{const max=e.maxScore||100;const pct=Math.round(e.scores[s]/max*100);return `<span class="tag tag-green">${s}:${e.scores[s]}/${max}(${pct}%)</span>`;}).join('')}</div></div>`:''}
       ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value" style="font-size:13px">${e.todayProgress}</div></div>`:''}
       ${e.todayHomework?`<div class="detail-row"><div class="detail-label">作業</div><div class="detail-value" style="font-size:13px">${e.todayHomework}</div></div>`:''}
@@ -1383,7 +1412,7 @@ function adminRenderStats() {
   document.getElementById('statsList').innerHTML = names.map(t=>{
     const te = allEntries.filter(e=>e.teacherName===t);
     const totalAbsent = te.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
-    const totalHwMiss = te.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
+    const totalHwMiss = te.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>normHw(v)==='missing').length,0);
     return `<div class="teacher-stat">
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <span style="font-size:16px;font-weight:900">${t}</span>
@@ -1392,7 +1421,7 @@ function adminRenderStats() {
       <div class="mini-stats">
         <div class="mini-stat"><div class="mini-stat-num" style="color:var(--purple)">${te.length}</div><div class="mini-stat-lbl">📋 日誌數</div></div>
         <div class="mini-stat"><div class="mini-stat-num" style="color:var(--red)">${totalAbsent}</div><div class="mini-stat-lbl">❌ 缺席次</div></div>
-        <div class="mini-stat"><div class="mini-stat-num" style="color:var(--yellow)">${totalHwMiss}</div><div class="mini-stat-lbl">⚠️ 未繳次</div></div>
+        <div class="mini-stat"><div class="mini-stat-num" style="color:var(--yellow)">${totalHwMiss}</div><div class="mini-stat-lbl">❌ 缺繳次</div></div>
       </div>
     </div>`;
   }).join('');
@@ -1481,7 +1510,7 @@ window.confirmDelete = async function() {
 
 function normAtt(v){
   if(v===true||v==='present') return 'present';
-  if(v===false||v==='absent') return 'absent';
+  if(normHw(v)==='missing'||v==='absent') return 'absent';
   if(['present','late','sick','leave','absent'].includes(v)) return v;
   return 'present';
 }
@@ -1557,7 +1586,7 @@ window.adminStudentSearch=function(){
 
   const totalPresent=studentEntries.filter(e=>normAtt(e.attendance?.[name])==='present').length;
   const totalAbsent=studentEntries.length-totalPresent;
-  const totalHwDone=studentEntries.filter(e=>e.homework?.[name]!==false).length;
+  const totalHwDone=studentEntries.filter(e=>isHwDone(e.homework?.[name])).length;
   const scoreList=studentEntries.filter(e=>e.scores?.[name]!==''&&e.scores?.[name]!=null);
   const avgPct=scoreList.length?Math.round(scoreList.reduce((a,e)=>a+e.scores[name]/(e.maxScore||100)*100,0)/scoreList.length):null;
   const avgColor=avgPct===null?'var(--muted)':avgPct>=90?'var(--teal)':avgPct>=60?'var(--yellow)':'var(--red)';
@@ -1580,7 +1609,7 @@ window.adminStudentSearch=function(){
         </div>
         <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
           <div style="font-size:26px;font-weight:900;color:${totalHwDone<studentEntries.length?'var(--yellow)':'var(--teal)'}">${totalHwDone}/${studentEntries.length}</div>
-          <div style="font-size:12px;color:var(--muted)">作業繳交</div>
+          <div style="font-size:12px;color:var(--muted)">作業已完成</div>
         </div>
         <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
           <div style="font-size:26px;font-weight:900;color:${avgColor}">${avgPct!==null?avgPct+'%':'—'}</div>
@@ -1610,7 +1639,7 @@ window.adminStudentSearch=function(){
           <tbody>`;
     es.forEach(e=>{
       const st=normAtt(e.attendance?.[name]);
-      const hwOk=e.homework?.[name]!==false;
+      const hwSt=normHw(e.homework?.[name]);
       const score=e.scores?.[name];
       const hasScore=score!==''&&score!=null;
       const max=e.maxScore||100;
@@ -1619,7 +1648,7 @@ window.adminStudentSearch=function(){
       html+=`<tr>
         <td style="padding:8px 10px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${ATT_BG[st]}">${ATT_EMOJI[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${HW_BG[hwSt]}">${HW_EMOJI[hwSt]} <span style="font-size:11px">${HW_LABELS[hwSt]}</span></td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scoreColor}">${hasScore?`${score}/${max}<br><span style="font-size:11px">${pct}%</span>`:'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted);max-width:140px">${e.todayProgress||'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted);max-width:120px">${e.todayHomework||'—'}</td>
