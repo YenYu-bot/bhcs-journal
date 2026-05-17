@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>百宏文教 · 主管總覽</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d1117;--surface:#161b22;--surface2:#1c2128;--border:rgba(255,255,255,0.08);--red:#ff6b6b;--teal:#56ccb2;--yellow:#ffd166;--purple:#c084fc;--text:#e6edf3;--muted:rgba(230,237,243,0.45);--radius:14px;}
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-serif;min-height:100vh;}
+  .header{background:linear-gradient(135deg,#1a0a2e,#2d1b4e);border-bottom:1px solid rgba(168,85,247,.2);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
+  .brand-sub{font-size:10px;letter-spacing:3px;color:var(--purple);font-weight:700;text-transform:uppercase;margin-bottom:2px;}
+  .brand{font-size:18px;font-weight:900;}
+  .admin-badge{background:rgba(168,85,247,.2);border:1px solid rgba(168,85,247,.4);border-radius:20px;padding:4px 14px;font-size:12px;color:var(--purple);font-weight:700;}
+  .main{padding:20px 16px;max-width:1000px;margin:0 auto;}
+  .btn{border:none;border-radius:10px;padding:8px 16px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;}
+  .btn-ghost{background:rgba(255,255,255,.07);color:var(--muted);}
+  .btn-ghost:hover{background:rgba(255,255,255,.12);color:var(--text);}
+  .btn-sm{padding:6px 12px;font-size:12px;border-radius:8px;}
+  .btn-purple{background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;}
+  .btn-teal{background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;}
+  .btn-red{background:rgba(255,107,107,.15);color:var(--red);border:1px solid rgba(255,107,107,.3);}
+
+  /* Login */
+  .login-box{max-width:420px;margin:80px auto;background:var(--surface);border-radius:20px;padding:32px;border:1px solid rgba(168,85,247,.2);}
+  .login-title{font-size:22px;font-weight:900;margin-bottom:6px;}
+  .login-sub{color:var(--muted);font-size:13px;margin-bottom:24px;}
+  .field-label{display:block;font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;letter-spacing:1px;text-transform:uppercase;}
+  .field-input{width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px 12px;color:var(--text);font-family:inherit;font-size:14px;outline:none;margin-bottom:14px;transition:border .15s;}
+  .field-input:focus{border-color:#8b5cf6;}
+
+  /* Tabs */
+  .tabs{display:flex;border-bottom:1px solid var(--border);margin-bottom:20px;overflow-x:auto;}
+  .tab{background:none;border:none;border-bottom:2px solid transparent;padding:10px 18px;font-family:inherit;font-size:13px;font-weight:500;color:var(--muted);cursor:pointer;transition:all .2s;white-space:nowrap;}
+  .tab.active{color:var(--purple);border-bottom-color:#8b5cf6;font-weight:700;}
+
+  /* Summary */
+  .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:20px;}
+  .summary-card{background:var(--surface);border-radius:var(--radius);padding:16px;border:1px solid var(--border);text-align:center;}
+  .summary-num{font-size:32px;font-weight:900;}
+  .summary-lbl{font-size:12px;color:var(--muted);margin-top:4px;}
+
+  /* Filter */
+  .filter-bar{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;}
+  .filter-select{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 12px;color:var(--text);font-family:inherit;font-size:13px;outline:none;cursor:pointer;}
+
+  /* Entry cards */
+  .entry-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);margin-bottom:10px;overflow:hidden;}
+  .entry-header{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;cursor:pointer;}
+  .entry-date{font-size:16px;font-weight:900;color:var(--purple);}
+  .entry-teacher{font-size:13px;color:var(--teal);margin-left:8px;font-weight:700;}
+  .entry-weekday{font-size:12px;color:var(--muted);margin-left:6px;}
+  .entry-badges{display:flex;gap:6px;align-items:center;}
+  .badge{padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;}
+  .badge-red{background:rgba(255,107,107,.2);color:var(--red);}
+  .badge-yellow{background:rgba(255,209,102,.2);color:var(--yellow);}
+  .badge-teal{background:rgba(86,204,178,.2);color:var(--teal);}
+  .entry-body{padding:0 16px 14px;border-top:1px solid var(--border);display:none;}
+  .entry-body.open{display:block;padding-top:14px;}
+  .detail-row{display:flex;gap:10px;margin-bottom:10px;align-items:flex-start;}
+  .detail-label{font-size:11px;font-weight:700;color:var(--muted);min-width:56px;padding-top:2px;text-transform:uppercase;}
+  .detail-value{flex:1;font-size:13px;}
+  .tag{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600;margin:2px;}
+  .tag-green{background:rgba(86,204,178,.15);color:var(--teal);}
+  .tag-red{background:rgba(255,107,107,.15);color:var(--red);}
+  .tag-yellow{background:rgba(255,209,102,.15);color:var(--yellow);}
+  .chevron{color:var(--muted);font-size:16px;transition:transform .2s;}
+  .chevron.open{transform:rotate(180deg);}
+
+  /* Teacher management */
+  .teacher-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:16px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;gap:12px;}
+  .teacher-info{flex:1;}
+  .teacher-name-big{font-size:16px;font-weight:900;}
+  .teacher-meta{font-size:12px;color:var(--muted);margin-top:4px;}
+  .teacher-actions{display:flex;gap:8px;}
+
+  /* Add teacher form */
+  .add-form{background:var(--surface);border-radius:var(--radius);border:1px solid rgba(86,204,178,.3);padding:20px;margin-bottom:20px;}
+  .add-form-title{font-size:14px;font-weight:700;color:var(--teal);margin-bottom:16px;}
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .form-field{margin-bottom:0;}
+  .form-input{width:100%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px 12px;color:var(--text);font-family:inherit;font-size:14px;outline:none;transition:border .15s;}
+  .form-input:focus{border-color:var(--teal);}
+
+  /* Stats */
+  .teacher-stat{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:16px;margin-bottom:10px;}
+  .mini-stats{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+  .mini-stat{background:rgba(255,255,255,.05);border-radius:10px;padding:8px 12px;text-align:center;min-width:70px;}
+  .mini-stat-num{font-size:15px;font-weight:700;}
+  .mini-stat-lbl{font-size:10px;color:var(--muted);margin-top:2px;}
+
+  /* Modal */
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;align-items:center;justify-content:center;}
+  .modal-overlay.show{display:flex;}
+  .modal{background:var(--surface);border-radius:20px;padding:28px;width:90%;max-width:400px;border:1px solid rgba(168,85,247,.3);}
+  .modal-title{font-size:18px;font-weight:900;margin-bottom:6px;}
+  .modal-sub{font-size:13px;color:var(--muted);margin-bottom:20px;}
+  .modal-actions{display:flex;gap:10px;margin-top:20px;}
+
+  .loading-overlay{display:none;position:fixed;inset:0;background:rgba(13,17,23,.85);z-index:999;align-items:center;justify-content:center;flex-direction:column;gap:14px;}
+  .loading-overlay.show{display:flex;}
+  .spinner{width:48px;height:48px;border:3px solid rgba(168,85,247,.2);border-top-color:#8b5cf6;border-radius:50%;animation:spin .8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .loading-text{color:var(--purple);font-weight:700;font-size:15px;}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--surface2);border:1px solid var(--border);border-radius:30px;padding:11px 22px;font-weight:700;font-size:13px;z-index:1000;transition:transform .3s cubic-bezier(.34,1.56,.64,1);white-space:nowrap;box-shadow:0 8px 30px rgba(0,0,0,.5);}
+  .toast.show{transform:translateX(-50%) translateY(0);}
+  .toast.success{border-color:rgba(86,204,178,.4);color:var(--teal);}
+  .toast.error{border-color:rgba(255,107,107,.4);color:var(--red);}
+  .empty{text-align:center;padding:60px 20px;color:var(--muted);}
+  .empty-icon{font-size:52px;margin-bottom:12px;}
+  @media(max-width:600px){.summary-grid{grid-template-columns:1fr 1fr;}.form-grid{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">載入中...</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<!-- 刪除確認 Modal -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal">
+    <div class="modal-title">⚠️ 確認刪除老師帳號</div>
+    <div class="modal-sub" id="deleteModalSub">確定要刪除此老師帳號嗎？此操作無法還原。</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal()">取消</button>
+      <button class="btn btn-red" style="flex:1;padding:10px;" onclick="confirmDelete()">確認刪除</button>
+    </div>
+  </div>
+</div>
+
+<!-- LOGIN -->
+<div id="loginPage">
+  <div style="padding:20px;text-align:center;border-bottom:1px solid rgba(168,85,247,.2);background:linear-gradient(135deg,#1a0a2e,#2d1b4e);">
+    <div style="font-size:10px;letter-spacing:3px;color:var(--purple);font-weight:700;text-transform:uppercase;">百宏文教機構</div>
+    <div style="font-size:20px;font-weight:900;">👑 主管總覽系統</div>
+  </div>
+  <div class="login-box">
+    <div class="login-title">主管登入</div>
+    <div class="login-sub">僅限授權主管使用</div>
+    <label class="field-label">帳號</label>
+    <input class="field-input" id="loginUser" placeholder="admin">
+    <label class="field-label">密碼</label>
+    <input class="field-input" type="password" id="loginPass" placeholder="••••••" onkeydown="if(event.key==='Enter')login()">
+    <button class="btn btn-purple" style="width:100%;padding:12px;font-size:15px;" onclick="login()">登入主管系統</button>
+    <div id="loginError" style="color:var(--red);font-size:13px;margin-top:10px;text-align:center;display:none;">帳號或密碼錯誤</div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div id="appPage" style="display:none;">
+  <div class="header">
+    <div>
+      <div class="brand-sub">百宏文教機構</div>
+      <div class="brand">👑 主管總覽系統</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="admin-badge">主管</span>
+      <button class="btn btn-ghost btn-sm" onclick="refreshData()">🔄 更新</button>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">登出</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('overview',this)">📊 總覽</button>
+      <button class="tab" onclick="switchTab('entries',this)">📋 所有日誌</button>
+      <button class="tab" onclick="switchTab('stats',this)">📈 老師統計</button>
+      <button class="tab" onclick="switchTab('student',this)">👤 學生查詢</button>
+      <button class="tab" onclick="switchTab('accounts',this)">⚙️ 帳號管理</button>
+    </div>
+
+    <!-- OVERVIEW -->
+    <div id="tab-overview">
+      <div class="summary-grid" id="summaryGrid"></div>
+      <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:12px;">📅 最近日誌</div>
+      <div id="recentList"></div>
+    </div>
+
+    <!-- ALL ENTRIES -->
+    <div id="tab-entries" style="display:none;">
+      <div class="filter-bar">
+        <select class="filter-select" id="filterClass" onchange="renderEntries()"><option value="">所有班級</option></select>
+        <select class="filter-select" id="filterTeacher" onchange="renderEntries()"><option value="">所有老師</option></select>
+        <select class="filter-select" id="filterDate" onchange="renderEntries()"><option value="">所有日期</option></select>
+      </div>
+      <div id="entriesList"></div>
+    </div>
+
+    <!-- STATS -->
+    <div id="tab-stats" style="display:none;">
+      <div id="statsList"></div>
+    </div>
+
+    <!-- STUDENT SEARCH -->
+    <div id="tab-student" style="display:none;">
+      <div style="background:rgba(192,132,252,.07);border:1px solid rgba(192,132,252,.2);border-radius:var(--radius);padding:16px;margin-bottom:14px;">
+        <div style="font-size:14px;font-weight:700;color:var(--purple);margin-bottom:12px;">👤 跨班級學生查詢</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:14px;">可查詢任何學生在所有老師、所有班級的完整記錄</div>
+
+        <!-- Quick pick -->
+        <div style="margin-bottom:14px;">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">所有學生（點擊快速查詢）</div>
+          <div id="adminStudentPick" style="display:flex;flex-wrap:wrap;gap:6px;max-height:120px;overflow-y:auto;"></div>
+        </div>
+
+        <!-- Search input -->
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <input id="adminStudentInput" style="flex:1;background:#21262d;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 14px;color:#e6edf3;font-family:inherit;font-size:14px;outline:none;" placeholder="輸入學生姓名搜尋" oninput="filterStudentPick()" onkeydown="if(event.key==='Enter')adminStudentSearch()">
+          <button class="btn btn-purple" style="padding:10px 20px;" onclick="adminStudentSearch()">🔍 查詢</button>
+        </div>
+
+        <!-- Date range (optional) -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;letter-spacing:1px;text-transform:uppercase;">開始日期（選填）</div>
+            <input type="date" id="adminStudentStart" style="width:100%;background:#21262d;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;color:#e6edf3;font-family:inherit;font-size:14px;outline:none;">
+          </div>
+          <div>
+            <div style="font-size:11px;font-weight:700;color:var(--muted);margin-bottom:6px;letter-spacing:1px;text-transform:uppercase;">結束日期（選填）</div>
+            <input type="date" id="adminStudentEnd" style="width:100%;background:#21262d;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;color:#e6edf3;font-family:inherit;font-size:14px;outline:none;">
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-bottom:18px;">
+        <button class="btn btn-purple" style="flex:1;padding:12px;font-size:14px;" onclick="adminStudentSearch()">📊 產生學生報表</button>
+        <button class="btn btn-ghost" style="padding:12px 18px;" onclick="printStudentReport()">🖨 列印</button>
+      </div>
+
+      <div id="adminStudentOutput"></div>
+    </div>
+
+    <!-- ACCOUNTS -->
+    <div id="tab-accounts" style="display:none;">
+      <!-- Add form -->
+      <div class="add-form">
+        <div class="add-form-title">➕ 新增老師帳號</div>
+        <div class="form-grid">
+          <div class="form-field">
+            <label class="field-label">老師姓名</label>
+            <input class="form-input" id="newName" placeholder="例：George 老師">
+          </div>
+          <div class="form-field">
+            <label class="field-label">登入帳號</label>
+            <input class="form-input" id="newUser" placeholder="例：george（英文小寫）">
+          </div>
+          <div class="form-field">
+            <label class="field-label">密碼</label>
+            <input class="form-input" type="password" id="newPass" placeholder="至少4碼">
+          </div>
+          <div class="form-field">
+            <label class="field-label">確認密碼</label>
+            <input class="form-input" type="password" id="newPass2" placeholder="再輸入一次">
+          </div>
+        </div>
+        <button class="btn btn-teal" style="margin-top:14px;padding:10px 24px;" onclick="addTeacher()">✅ 新增帳號</button>
+      </div>
+
+      <!-- Teacher list -->
+      <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:12px;">👥 目前老師帳號（<span id="teacherCount">0</span> 位）</div>
+      <div id="teacherList"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+import { getFirestore, collection, getDocs, addDoc, doc, updateDoc, deleteDoc, setDoc, orderBy, query, where } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBMMEKGuMYdOCglS8_gIx0HpB4u9ClE28s",
+  authDomain: "bhcs-journal.firebaseapp.com",
+  projectId: "bhcs-journal",
+  storageBucket: "bhcs-journal.firebasestorage.app",
+  messagingSenderId: "879408543982",
+  appId: "1:879408543982:web:833a6ece945e8445125bff"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// 主管帳號（固定，不存在 Firestore）
+const ADMIN = { user: "admin", password: "admin888" };
+
+let allEntries = [];
+let teachers = []; // 從 Firestore 載入
+let deleteTargetId = null;
+
+// ── LOGIN ──
+window.login = async function() {
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value;
+  if (user === ADMIN.user && pass === ADMIN.password) {
+    document.getElementById('loginPage').style.display = 'none';
+    document.getElementById('appPage').style.display = 'block';
+    await loadAll();
+  } else {
+    document.getElementById('loginError').style.display = 'block';
+  }
+};
+
+window.logout = function() {
+  document.getElementById('loginPage').style.display = 'block';
+  document.getElementById('appPage').style.display = 'none';
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
+};
+
+window.switchTab = function(name, el) {
+  ['overview','entries','stats','student','accounts'].forEach(t => document.getElementById('tab-'+t).style.display='none');
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-'+name).style.display = 'block';
+  el.classList.add('active');
+  if (name==='entries') renderEntries();
+  if (name==='stats') renderStats();
+  if (name==='accounts') renderTeachers();
+  if (name==='student') renderAdminStudentPick();
+};
+
+// ── LOAD ALL ──
+async function loadAll() {
+  showLoading('載入資料...');
+  try {
+    // Load entries
+    const eq = query(collection(db,'entries'), orderBy('savedAt','desc'));
+    const esnap = await getDocs(eq);
+    allEntries = esnap.docs.map(d => ({_id:d.id,...d.data()}));
+
+    // Load teachers
+    const tsnap = await getDocs(collection(db,'teachers'));
+    teachers = tsnap.docs.map(d => ({_id:d.id,...d.data()}));
+
+    renderOverview();
+    populateFilters();
+  } catch(e) { showToast('❌ 載入失敗：'+e.message,'error'); console.error(e); }
+  hideLoading();
+}
+
+window.refreshData = async function() { await loadAll(); showToast('🔄 資料已更新'); };
+
+// ── OVERVIEW ──
+function renderOverview() {
+  const teacherNames = [...new Set(allEntries.map(e=>e.teacherName))];
+  const totalAbsent = allEntries.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
+  const totalHwMiss = allEntries.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
+  document.getElementById('summaryGrid').innerHTML = `
+    <div class="summary-card"><div class="summary-num" style="color:var(--teal)">${allEntries.length}</div><div class="summary-lbl">總日誌數</div></div>
+    <div class="summary-card"><div class="summary-num" style="color:var(--purple)">${teachers.length}</div><div class="summary-lbl">老師人數</div></div>
+    <div class="summary-card"><div class="summary-num" style="color:var(--red)">${totalAbsent}</div><div class="summary-lbl">累計缺席次</div></div>
+    <div class="summary-card"><div class="summary-num" style="color:var(--yellow)">${totalHwMiss}</div><div class="summary-lbl">累計未繳次</div></div>`;
+  const recent = allEntries.slice(0,8);
+  document.getElementById('recentList').innerHTML = recent.length
+    ? recent.map((e,i) => entryCard(e,'r'+i)).join('')
+    : '<div class="empty"><div class="empty-icon">📭</div><div>尚無日誌</div></div>';
+}
+
+function populateFilters() {
+  const classes = [...new Set(allEntries.map(e=>e.className).filter(Boolean))].sort();
+  document.getElementById('filterClass').innerHTML = '<option value="">所有班級</option>' + classes.map(c=>`<option>${c}</option>`).join('');
+
+  const names = [...new Set(allEntries.map(e=>e.teacherName))].sort();
+  const dates = [...new Set(allEntries.map(e=>e.date))].sort().reverse();
+  document.getElementById('filterTeacher').innerHTML = '<option value="">所有老師</option>' + names.map(t=>`<option>${t}</option>`).join('');
+  document.getElementById('filterDate').innerHTML = '<option value="">所有日期</option>' + dates.map(d=>`<option>${d}</option>`).join('');
+}
+
+// ── ENTRIES ──
+window.renderEntries = function() {
+  const teacher = document.getElementById('filterTeacher').value;
+  const date = document.getElementById('filterDate').value;
+  let filtered = allEntries;
+  if (teacher) filtered = filtered.filter(e=>e.teacherName===teacher);
+  if (date) filtered = filtered.filter(e=>e.date===date);
+  document.getElementById('entriesList').innerHTML = filtered.length
+    ? filtered.map((e,i) => entryCard(e,'e'+i)).join('')
+    : '<div class="empty"><div class="empty-icon">🔍</div><div>沒有符合的日誌</div></div>';
+};
+
+function entryCard(e, prefix) {
+  const sts = e.students||Object.keys(e.attendance||{});
+  const absent = sts.filter(s=>!e.attendance[s]);
+  const hwMiss = sts.filter(s=>e.homework[s]===false);
+  const hasScores = sts.some(s=>e.scores?.[s]!=='');
+  return `<div class="entry-card">
+    <div class="entry-header" onclick="toggleE('${prefix}')">
+      <div><span class="entry-date">${e.date}</span><span class="entry-teacher">${e.teacherName}</span><span style="color:#c084fc;font-size:12px;margin-left:6px;font-weight:700">${e.className||''}</span><span class="entry-weekday"> · 星期${e.weekday} · ${sts.length}人</span></div>
+      <div class="entry-badges">
+        ${absent.length?`<span class="badge badge-red">缺${absent.length}</span>`:''}
+        ${hwMiss.length?`<span class="badge badge-yellow">未繳${hwMiss.length}</span>`:''}
+        <span class="chevron" id="chev-${prefix}">▼</span>
+      </div>
+    </div>
+    <div class="entry-body" id="body-${prefix}">
+      <div class="detail-row"><div class="detail-label">出缺勤</div><div class="detail-value">${sts.map(s=>`<span class="tag ${e.attendance[s]?'tag-green':'tag-red'}">${s}</span>`).join('')}</div></div>
+      <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted);font-size:13px">全部繳交 ✅</span>'}</div></div>
+      ${hasScores?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!=="").map(s=>{const max=e.maxScore||100;const pct=Math.round(e.scores[s]/max*100);return `<span class="tag tag-green">${s}:${e.scores[s]}/${max}(${pct}%)</span>`;}).join('')}</div></div>`:''}
+      ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value" style="font-size:13px">${e.todayProgress}</div></div>`:''}
+      ${e.todayHomework?`<div class="detail-row"><div class="detail-label">作業</div><div class="detail-value" style="font-size:13px">${e.todayHomework}</div></div>`:''}
+      ${e.nextExam?`<div class="detail-row"><div class="detail-label">考試</div><div class="detail-value" style="font-size:13px;color:var(--red);font-weight:700">${e.nextExam}</div></div>`:''}
+      ${e.notes?`<div class="detail-row"><div class="detail-label">備註</div><div class="detail-value" style="font-size:13px;color:var(--muted)">${e.notes}</div></div>`:''}
+    </div>
+  </div>`;
+}
+window.toggleE = function(p){document.getElementById('body-'+p).classList.toggle('open');document.getElementById('chev-'+p).classList.toggle('open');};
+
+// ── STATS ──
+function renderStats() {
+  const names = [...new Set(allEntries.map(e=>e.teacherName))].sort();
+  if (!names.length){document.getElementById('statsList').innerHTML='<div class="empty"><div class="empty-icon">📈</div><div>尚無資料</div></div>';return;}
+  document.getElementById('statsList').innerHTML = names.map(t=>{
+    const te = allEntries.filter(e=>e.teacherName===t);
+    const totalAbsent = te.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
+    const totalHwMiss = te.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
+    return `<div class="teacher-stat">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:16px;font-weight:900">${t}</span>
+        <span style="font-size:12px;color:var(--muted)">最後填寫：${te[0]?.date||'-'}</span>
+      </div>
+      <div class="mini-stats">
+        <div class="mini-stat"><div class="mini-stat-num" style="color:var(--purple)">${te.length}</div><div class="mini-stat-lbl">📋 日誌數</div></div>
+        <div class="mini-stat"><div class="mini-stat-num" style="color:var(--red)">${totalAbsent}</div><div class="mini-stat-lbl">❌ 缺席次</div></div>
+        <div class="mini-stat"><div class="mini-stat-num" style="color:var(--yellow)">${totalHwMiss}</div><div class="mini-stat-lbl">⚠️ 未繳次</div></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── ACCOUNTS ──
+function renderTeachers() {
+  document.getElementById('teacherCount').textContent = teachers.length;
+  if (!teachers.length) {
+    document.getElementById('teacherList').innerHTML = '<div class="empty"><div class="empty-icon">👤</div><div>尚無老師帳號，請新增</div></div>';
+    return;
+  }
+  document.getElementById('teacherList').innerHTML = teachers.map(t => `
+    <div class="teacher-card">
+      <div class="teacher-info">
+        <div class="teacher-name-big">${t.name}</div>
+        <div class="teacher-meta">帳號：${t.userId}　　已填日誌：${allEntries.filter(e=>e.teacherId===t.userId).length} 筆</div>
+      </div>
+      <div class="teacher-actions">
+        <button class="btn btn-sm btn-ghost" onclick="resetPassword('${t._id}','${t.name}')">🔑 重設密碼</button>
+        <button class="btn btn-sm btn-red" onclick="promptDelete('${t._id}','${t.name}')">🗑 刪除</button>
+      </div>
+    </div>`).join('');
+}
+
+window.addTeacher = async function() {
+  const name = document.getElementById('newName').value.trim();
+  const userId = document.getElementById('newUser').value.trim().toLowerCase();
+  const pass = document.getElementById('newPass').value;
+  const pass2 = document.getElementById('newPass2').value;
+  if (!name||!userId||!pass){showToast('請填寫所有欄位','error');return;}
+  if (pass !== pass2){showToast('兩次密碼不一致','error');return;}
+  if (pass.length < 4){showToast('密碼至少4碼','error');return;}
+  if (teachers.find(t=>t.userId===userId)){showToast('此帳號已存在','error');return;}
+  if (userId==='admin'){showToast('不能使用 admin 作為帳號','error');return;}
+  showLoading('新增帳號中...');
+  try {
+    await addDoc(collection(db,'teachers'),{ name, userId, password:pass, createdAt:Date.now() });
+    showToast(`✅ 已新增：${name}`);
+    document.getElementById('newName').value='';
+    document.getElementById('newUser').value='';
+    document.getElementById('newPass').value='';
+    document.getElementById('newPass2').value='';
+    await loadAll();
+    renderTeachers();
+  } catch(e){showToast('❌ 新增失敗：'+e.message,'error');}
+  hideLoading();
+};
+
+window.resetPassword = async function(id, name) {
+  const newPass = prompt(`為「${name}」設定新密碼（至少4碼）：`);
+  if (!newPass) return;
+  if (newPass.length < 4){showToast('密碼至少4碼','error');return;}
+  showLoading('更新密碼中...');
+  try {
+    await updateDoc(doc(db,'teachers',id),{ password:newPass });
+    showToast(`🔑 ${name} 密碼已更新`);
+    const idx = teachers.findIndex(t=>t._id===id);
+    if(idx>=0) teachers[idx].password = newPass;
+  } catch(e){showToast('❌ 更新失敗','error');}
+  hideLoading();
+};
+
+window.promptDelete = function(id, name) {
+  deleteTargetId = id;
+  document.getElementById('deleteModalSub').textContent = `確定要刪除「${name}」的帳號嗎？此操作無法還原，但不會刪除該老師的日誌記錄。`;
+  document.getElementById('deleteModal').classList.add('show');
+};
+window.closeModal = function(){document.getElementById('deleteModal').classList.remove('show');deleteTargetId=null;};
+
+window.confirmDelete = async function() {
+  if (!deleteTargetId) return;
+  closeModal();
+  showLoading('刪除中...');
+  try {
+    await deleteDoc(doc(db,'teachers',deleteTargetId));
+    teachers = teachers.filter(t=>t._id!==deleteTargetId);
+    renderTeachers();
+    showToast('🗑 帳號已刪除');
+  } catch(e){showToast('❌ 刪除失敗','error');}
+  hideLoading();
+  deleteTargetId = null;
+};
+
+// ── STUDENT SEARCH (cross-teacher) ──
+const ATT_LABELS = {present:'出勤',late:'遲到',sick:'病假',leave:'事假',absent:'曠課'};
+const ATT_EMOJI  = {present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'❌'};
+const ATT_BG     = {present:'rgba(86,204,178,.2)',late:'rgba(255,159,67,.2)',sick:'rgba(86,130,204,.2)',leave:'rgba(192,132,252,.2)',absent:'rgba(255,107,107,.2)'};
+
+function normAtt(v){
+  if(v===true||v==='present') return 'present';
+  if(v===false||v==='absent') return 'absent';
+  if(['present','late','sick','leave','absent'].includes(v)) return v;
+  return 'present';
+}
+
+function renderAdminStudentPick(){
+  const allNames=[...new Set(allEntries.flatMap(e=>e.students||[]))].sort();
+  const el=document.getElementById('adminStudentPick');
+  if(!allNames.length){el.innerHTML='<span style="color:var(--muted);font-size:13px">尚無資料</span>';return;}
+  el.innerHTML=allNames.map(n=>`
+    <button onclick="pickAdminStudent('${n}')"
+      style="background:#21262d;border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:5px 14px;color:#e6edf3;font-family:inherit;font-size:13px;cursor:pointer;transition:all .15s;"
+      onmouseover="this.style.borderColor='#c084fc';this.style.color='#c084fc'"
+      onmouseout="this.style.borderColor='rgba(255,255,255,.1)';this.style.color='#e6edf3'">${n}</button>`).join('');
+}
+
+window.pickAdminStudent=function(name){
+  document.getElementById('adminStudentInput').value=name;
+  adminStudentSearch();
+};
+
+window.filterStudentPick=function(){
+  const q=document.getElementById('adminStudentInput').value.trim();
+  document.querySelectorAll('#adminStudentPick button').forEach(b=>{
+    b.style.display=(!q||b.textContent.includes(q))?'':'none';
+  });
+};
+
+window.adminStudentSearch=function(){
+  const name=document.getElementById('adminStudentInput').value.trim();
+  if(!name){showToast('請輸入學生姓名','error');return;}
+
+  const startStr=document.getElementById('adminStudentStart').value;
+  const endStr=document.getElementById('adminStudentEnd').value;
+
+  const parseMMDD=(s)=>{
+    if(!s) return null;
+    const p=s.replace(/\//g,'-').split('-');
+    return p.length<3?null:`${p[1].padStart(2,'0')}/${p[2].padStart(2,'0')}`;
+  };
+  const startMMDD=parseMMDD(startStr);
+  const endMMDD=parseMMDD(endStr);
+
+  const toMMDD=(date)=>{
+    if(!date) return null;
+    if(date.includes('/')){const p=date.split('/');return `${p[0].padStart(2,'0')}/${p[1].padStart(2,'0')}`;}
+    const s=date.padStart(4,'0');return `${s.slice(0,2)}/${s.slice(2,4)}`;
+  };
+
+  // Search across ALL entries from ALL teachers
+  const studentEntries=allEntries.filter(e=>{
+    if(!(e.students||[]).includes(name)) return false;
+    if(startMMDD&&endMMDD){
+      const d=toMMDD(e.date);
+      return d&&d>=startMMDD&&d<=endMMDD;
+    }
+    return true;
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+
+  const outEl=document.getElementById('adminStudentOutput');
+
+  if(!studentEntries.length){
+    outEl.innerHTML=`<div style="color:var(--muted);padding:20px;text-align:center;">找不到「${name}」的任何記錄</div>`;
+    return;
+  }
+
+  // Group by teacher + class
+  const byGroup={};
+  studentEntries.forEach(e=>{
+    const key=`${e.teacherName||'未知老師'} · ${e.className||'未知班級'}`;
+    if(!byGroup[key]) byGroup[key]={teacher:e.teacherName,cls:e.className,entries:[]};
+    byGroup[key].entries.push(e);
+  });
+
+  const totalPresent=studentEntries.filter(e=>normAtt(e.attendance?.[name])==='present').length;
+  const totalAbsent=studentEntries.length-totalPresent;
+  const totalHwDone=studentEntries.filter(e=>e.homework?.[name]!==false).length;
+  const scoreList=studentEntries.filter(e=>e.scores?.[name]!==''&&e.scores?.[name]!=null);
+  const avgPct=scoreList.length?Math.round(scoreList.reduce((a,e)=>a+e.scores[name]/(e.maxScore||100)*100,0)/scoreList.length):null;
+  const avgColor=avgPct===null?'var(--muted)':avgPct>=90?'var(--teal)':avgPct>=60?'var(--yellow)':'var(--red)';
+
+  let html=`
+    <div style="background:rgba(192,132,252,.08);border:1px solid rgba(192,132,252,.25);border-radius:14px;padding:18px;margin-bottom:18px;">
+      <div style="font-size:22px;font-weight:900;color:var(--purple);margin-bottom:6px;">👤 ${name}</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">
+        共 ${studentEntries.length} 筆記錄　跨 ${Object.keys(byGroup).length} 個班級
+        ${startMMDD&&endMMDD?`　日期：${startMMDD} ～ ${endMMDD}`:'（全部時間）'}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
+        <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
+          <div style="font-size:26px;font-weight:900;color:var(--teal)">${totalPresent}</div>
+          <div style="font-size:12px;color:var(--muted)">出勤次數</div>
+        </div>
+        <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
+          <div style="font-size:26px;font-weight:900;color:${totalAbsent>0?'var(--red)':'var(--muted)'}">${totalAbsent}</div>
+          <div style="font-size:12px;color:var(--muted)">缺課次數</div>
+        </div>
+        <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
+          <div style="font-size:26px;font-weight:900;color:${totalHwDone<studentEntries.length?'var(--yellow)':'var(--teal)'}">${totalHwDone}/${studentEntries.length}</div>
+          <div style="font-size:12px;color:var(--muted)">作業繳交</div>
+        </div>
+        <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
+          <div style="font-size:26px;font-weight:900;color:${avgColor}">${avgPct!==null?avgPct+'%':'—'}</div>
+          <div style="font-size:12px;color:var(--muted)">平均成績%</div>
+        </div>
+      </div>
+    </div>`;
+
+  Object.entries(byGroup).forEach(([groupName,g])=>{
+    const es=g.entries;
+    html+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:14px;">
+      <div style="margin-bottom:12px;">
+        <div style="font-size:15px;font-weight:900;color:var(--purple)">${g.cls||'未知班級'}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;">授課老師：${g.teacher||'未知'}</div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead><tr style="background:rgba(255,255,255,.05);">
+            <th style="padding:8px 10px;text-align:left;border:1px solid var(--border);white-space:nowrap">日期</th>
+            <th style="padding:8px;border:1px solid var(--border);text-align:center">出勤</th>
+            <th style="padding:8px;border:1px solid var(--border);text-align:center">作業</th>
+            <th style="padding:8px;border:1px solid var(--border);text-align:center;min-width:80px">成績</th>
+            <th style="padding:8px;border:1px solid var(--border);text-align:left">本日進度</th>
+            <th style="padding:8px;border:1px solid var(--border);text-align:left">本日作業</th>
+            <th style="padding:8px;border:1px solid var(--border);text-align:left">下次考試</th>
+          </tr></thead>
+          <tbody>`;
+    es.forEach(e=>{
+      const st=normAtt(e.attendance?.[name]);
+      const hwOk=e.homework?.[name]!==false;
+      const score=e.scores?.[name];
+      const hasScore=score!==''&&score!=null;
+      const max=e.maxScore||100;
+      const pct=hasScore?Math.round(score/max*100):null;
+      const scoreColor=pct===null?'var(--muted)':pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
+      html+=`<tr>
+        <td style="padding:8px 10px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${ATT_BG[st]}">${ATT_EMOJI[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scoreColor}">${hasScore?`${score}/${max}<br><span style="font-size:11px">${pct}%</span>`:'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted);max-width:140px">${e.todayProgress||'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted);max-width:120px">${e.todayHomework||'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--red);font-weight:600">${e.nextExam||'—'}</td>
+      </tr>`;
+    });
+    html+=`</tbody></table></div></div>`;
+  });
+
+  // store for print
+  document.getElementById('printArea').innerHTML=`<div style="font-family:'Noto Sans TC',sans-serif;padding:20px;color:#000;">
+    <h2 style="margin-bottom:4px">百宏文教機構 · 學生個人報表</h2>
+    <h3 style="font-weight:900;margin-bottom:8px">👤 ${name}</h3>
+    <div style="font-size:12px;margin-bottom:16px">產生時間：${new Date().toLocaleString('zh-TW')}</div>
+    ${html.replace(/var\(--[^)]+\)/g,'#333').replace(/rgba\([^)]+\)/g,'#f0f0f0')}
+  </div>`;
+
+  outEl.innerHTML=html;
+  showToast(`✅ 找到 ${name} 的 ${studentEntries.length} 筆跨班記錄`);
+};
+
+window.printStudentReport=function(){
+  const pa=document.getElementById('printArea');
+  if(!pa.innerHTML){showToast('請先產生報表','error');return;}
+  pa.style.display='block';
+  window.print();
+  setTimeout(()=>pa.style.display='none',1000);
+};
+
+function showLoading(msg){document.getElementById('loadingText').textContent=msg;document.getElementById('loadingOverlay').classList.add('show');}
+function hideLoading(){document.getElementById('loadingOverlay').classList.remove('show');}
+window.showToast=function(msg,type='success'){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+type;clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800);};
+</script>
+<div id="printArea" style="display:none;"></div>
+<style>@media print{body>*{display:none!important;}#printArea{display:block!important;background:#fff;}}</style>
+</body>
+</html>
