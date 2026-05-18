@@ -464,7 +464,6 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
 
 <script type="module">
 
-<script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
 import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, where } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
 
@@ -1111,7 +1110,7 @@ function buildHwTable(es, dates, students) {
   students.forEach(s => {
     const done = es.filter(e=>e.homework?.[s]!==false).length;
     t += `<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
-      ${es.map(e=>{const ok=e.homework?.[s]!==false;return `<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${ok?'rgba(86,204,178,.2)':'rgba(255,107,107,.2)'};font-size:14px">${ok?'✅':'⚠️'}</td>`;}).join('')}
+      ${es.map(e=>{const ok=e.homework?.[s]!==false;return `<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${ok?'rgba(86,204,178,.2)':'rgba(255,107,107,.2)';font-size:14px}">${ok?'✅':'⚠️'}</td>`;}).join('')}
       <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:#56ccb2">${done}</td>
       <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${(es.length-done)>0?'#ff6b6b':'var(--muted)'}">${es.length-done}</td>
     </tr>`;
@@ -1490,7 +1489,6 @@ window.confirmDelete= async function() {
   hideLoading(); deleteTargetId=null;
 };
 
-</script>
 
 <!-- Admin Delete Modal -->
 <div class="modal-overlay" id="deleteModal">
