@@ -484,6 +484,7 @@ const ATT_EMOJI  = {present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'�
 const ATT_BG     = {present:'rgba(86,204,178,.2)',late:'rgba(255,159,67,.2)',sick:'rgba(86,130,204,.2)',leave:'rgba(192,132,252,.2)',absent:'rgba(255,107,107,.2)'};
 const ATT_CLASSES = {present:'att-present',late:'att-late',sick:'att-sick',leave:'att-leave',absent:'att-absent'};
 const ATT_TAG    = {present:'tag-green',late:'tag-orange',sick:'tag-blue',leave:'tag-purple',absent:'tag-red'};
+function normAtt(v){if(v===true||v==='present')return 'present';if(v===false||v==='absent')return 'absent';if(['present','late','sick','leave','absent'].includes(v))return v;return 'present';}
 
 let currentUser = null;
 let myClasses = [];
@@ -1036,12 +1037,7 @@ window.generateReport = function() {
       const attBg={present:'rgba(86,204,178,.25)',late:'rgba(255,159,67,.25)',sick:'rgba(86,130,204,.25)',leave:'rgba(192,132,252,.25)',absent:'rgba(255,107,107,.25)'};
       const attText={present:'#56ccb2',late:'#ff9f43',sick:'#7cb3f0',leave:'#c084fc',absent:'#ff6b6b'};
       // Normalize attendance value - handle both string ('present') and legacy boolean (true/false)
-      const normAtt=(val)=>{
-        if(val===true||val==='present') return 'present';
-        if(val===false||val==='absent') return 'absent';
-        if(ATT_STATES.includes(val)) return val;
-        return 'present';
-      };
+
       let t=`<div style="margin-bottom:20px;">
         <div style="font-size:14px;font-weight:700;color:var(--teal);margin-bottom:10px;">👥 出勤記錄
           <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">
@@ -1237,13 +1233,7 @@ window.generateStudentReport = function() {
     byClass[k].push(e);
   });
 
-    const normAtt=(val)=>{
-    if(val===true||val==='present') return 'present';
-    if(val===false||val==='absent') return 'absent';
-    if(['present','late','sick','leave','absent'].includes(val)) return val;
-    return 'present';
-  };
-  const attEmoji={present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'❌'};
+    const attEmoji={present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'❌'};
   const attBg={present:'rgba(86,204,178,.2)',late:'rgba(255,159,67,.2)',sick:'rgba(86,130,204,.2)',leave:'rgba(192,132,252,.2)',absent:'rgba(255,107,107,.2)'};
 
   let html=`
@@ -1525,12 +1515,7 @@ window.confirmDelete = async function() {
 
 // ── STUDENT SEARCH (cross-teacher) ──
 
-function normAtt(v){
-  if(v===true||v==='present') return 'present';
-  if(v===false||v==='absent') return 'absent';
-  if(['present','late','sick','leave','absent'].includes(v)) return v;
-  return 'present';
-}
+
 
 function renderAdminStudentPick(){
   const allNames=[...new Set(allEntries.flatMap(e=>e.students||[]))].sort();
@@ -1699,12 +1684,7 @@ window.printStudentReport=function(){
 
 // ── STUDENT SEARCH (cross-teacher) ──
 
-function normAtt(v){
-  if(v===true||v==='present') return 'present';
-  if(v===false||v==='absent') return 'absent';
-  if(['present','late','sick','leave','absent'].includes(v)) return v;
-  return 'present';
-}
+
 
 function renderAdminStudentPick(){
   const allNames=[...new Set(allEntries.flatMap(e=>e.students||[]))].sort();
