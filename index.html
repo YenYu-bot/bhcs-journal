@@ -78,6 +78,8 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
 .hw-chip{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;cursor:pointer;user-select:none;transition:all .15s;}
 .hw-done{background:rgba(86,204,178,.1);border:1px solid rgba(86,204,178,.2);}
 .hw-miss{background:rgba(255,209,102,.1);border:1px solid rgba(255,209,102,.3);}
+.hw-partial{background:rgba(255,159,67,.1);border:1px solid rgba(255,159,67,.3);}
+.hw-missing{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);}
 .chip-name{font-size:14px;font-weight:700;}
 
 /* Score table */
@@ -486,6 +488,21 @@ const ATT_CLASSES = {present:'att-present',late:'att-late',sick:'att-sick',leave
 const ATT_TAG    = {present:'tag-green',late:'tag-orange',sick:'tag-blue',leave:'tag-purple',absent:'tag-red'};
 function normAtt(v){if(v===true||v==='present')return 'present';if(v===false||v==='absent')return 'absent';if(['present','late','sick','leave','absent'].includes(v))return v;return 'present';}
 
+// Homework states cycle: done -> partial -> missing
+const HW_STATES = ['done','partial','missing'];
+const HW_LABELS = {done:'已完成',partial:'部分缺繳',missing:'缺繳'};
+const HW_EMOJI = {done:'✅',partial:'🟠',missing:'❌'};
+const HW_CLASSES = {done:'hw-done',partial:'hw-partial',missing:'hw-missing'};
+function normHw(v){
+  if(v === true || v === 'done' || v === '已完成') return 'done';
+  if(v === false || v === 'missing' || v === 'miss' || v === '缺繳') return 'missing';
+  if(v === 'partial' || v === '部分缺繳') return 'partial';
+  return 'done';
+}
+function hwIsMissing(v){ return normHw(v) === 'missing'; }
+function hwIsPartial(v){ return normHw(v) === 'partial'; }
+function safeDisplay(id, value){ const el=document.getElementById(id); if(el) el.style.display=value; }
+
 let currentUser = null;
 let myClasses = [];
 let entries = [];
@@ -503,40 +520,60 @@ let deleteTargetId = null;
 window.login = async function() {
   const userId = document.getElementById('loginUser').value.trim().toLowerCase();
   const pass = document.getElementById('loginPass').value;
+  const loginError = document.getElementById('loginError');
+  if (loginError) loginError.style.display = 'none';
+  if (!userId || !pass) {
+    if (loginError) { loginError.textContent = '請輸入帳號與密碼'; loginError.style.display = 'block'; }
+    return;
+  }
   showLoading('驗證中...');
   try {
-    // Check if admin
+    // Check if admin. Admin login should not be blocked by teacher data loading errors.
     if (userId === ADMIN_CREDS.user && pass === ADMIN_CREDS.password) {
-      document.getElementById('loginPage').style.display = 'none';
-      document.getElementById('adminPage').style.display = 'block';
-      await adminLoadAll();
-      hideLoading(); return;
+      currentUser = { id: 'admin', name: '主管', role: 'admin' };
+      safeDisplay('loginPage','none');
+      safeDisplay('appPage','none');
+      safeDisplay('adminPage','block');
+      await adminLoadAll().catch(e => {
+        console.error('adminLoadAll failed:', e);
+        showToast('⚠️ 已登入主管頁，但雲端資料載入失敗：' + (e.message || e), 'error');
+      });
+      hideLoading();
+      return;
     }
-    // Check teacher
+
+    // Check teacher account in Firestore.
     const snap = await getDocs(query(collection(db,'teachers'), where('userId','==',userId)));
     if (!snap.empty) {
       const t = snap.docs[0].data();
-      if (t.password === pass) {
-        currentUser = {id:userId, name:t.name};
-        document.getElementById('loginPage').style.display = 'none';
-        document.getElementById('appPage').style.display = 'block';
-        document.getElementById('teacherBadge').textContent = t.name;
+      if (String(t.password || '') === pass) {
+        currentUser = {id:userId, name:t.name || userId, role:'teacher'};
+        safeDisplay('loginPage','none');
+        safeDisplay('adminPage','none');
+        safeDisplay('appPage','block');
+        document.getElementById('teacherBadge').textContent = currentUser.name;
         const k = localStorage.getItem('openaiKey');
-        if (k) document.getElementById('apiKey').value = k;
-        await Promise.all([loadClasses(), loadEntries()]);
-        hideLoading(); return;
+        if (k && document.getElementById('apiKey')) document.getElementById('apiKey').value = k;
+        await loadClasses().catch(e => { console.error('loadClasses failed:', e); showToast('⚠️ 班級資料載入失敗：' + (e.message || e), 'error'); });
+        await loadEntries().catch(e => { console.error('loadEntries failed:', e); showToast('⚠️ 日誌資料載入失敗：' + (e.message || e), 'error'); });
+        hideLoading();
+        return;
       }
     }
-    document.getElementById('loginError').style.display = 'block';
-  } catch(e) { showToast('❌ 登入失敗：'+e.message,'error'); }
+    if (loginError) { loginError.textContent = '帳號或密碼錯誤'; loginError.style.display = 'block'; }
+  } catch(e) {
+    console.error('login failed:', e);
+    if (loginError) { loginError.textContent = '登入失敗：' + (e.message || e); loginError.style.display = 'block'; }
+    showToast('❌ 登入失敗：'+(e.message || e),'error');
+  }
   hideLoading();
 };
 
 window.logout = function() {
   currentUser=null; myClasses=[]; entries=[];
-  document.getElementById('loginPage').style.display='block';
-  document.getElementById('appPage').style.display='none';
-  document.getElementById('adminPage').style.display='none';
+  safeDisplay('loginPage','block');
+  safeDisplay('appPage','none');
+  safeDisplay('adminPage','none');
   document.getElementById('loginUser').value='';
   document.getElementById('loginPass').value='';
 };
@@ -554,6 +591,7 @@ window.switchTab = function(name, el) {
 
 // ══ CLASSES ══
 async function loadClasses() {
+  if(!currentUser?.id) { myClasses=[]; refreshClassSelect(); return; }
   const snap = await getDocs(query(collection(db,'classes'), where('teacherId','==',currentUser.id)));
   myClasses = snap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
   refreshClassSelect();
@@ -646,7 +684,7 @@ window.onClassSelect = function() {
   if(!cls){document.getElementById('journalForm').style.display='none';return;}
   currentStudents=[...cls.students];
   attendance={};homework={};classRating={};
-  currentStudents.forEach(s=>{attendance[s]='present';homework[s]=true;classRating[s]=0;});
+  currentStudents.forEach(s=>{attendance[s]='present';homework[s]='done';classRating[s]=0;});
   document.getElementById('selectedClassInfo').style.display='block';
   document.getElementById('selectedClassInfo').textContent=`班級：${cls.name}　學生：${cls.students.join('、')}`;
   document.getElementById('journalForm').style.display='block';
@@ -687,13 +725,20 @@ window.cycleAtt = function(s) {
 };
 
 function renderHomework() {
-  document.getElementById('homeworkGrid').innerHTML = currentStudents.map(s=>`
-    <div class="hw-chip ${homework[s]?'hw-done':'hw-miss'}" onclick="toggleH('${s}')">
-      <span style="font-size:18px">${homework[s]?'✅':'⚠️'}</span>
+  document.getElementById('homeworkGrid').innerHTML = currentStudents.map(s=>{
+    const st = normHw(homework[s]);
+    return `<div class="hw-chip ${HW_CLASSES[st]}" onclick="toggleH('${s}')">
+      <span style="font-size:18px">${HW_EMOJI[st]}</span>
       <span class="chip-name">${s}</span>
-    </div>`).join('');
+      <span style="margin-left:auto;font-size:11px;font-weight:700;color:var(--muted)">${HW_LABELS[st]}</span>
+    </div>`;
+  }).join('');
 }
-window.toggleH=function(s){homework[s]=!homework[s];renderHomework();};
+window.toggleH=function(s){
+  const idx = HW_STATES.indexOf(normHw(homework[s]));
+  homework[s] = HW_STATES[(idx + 1) % HW_STATES.length];
+  renderHomework();
+};
 
 const RATING_LABELS=['','極差','較差','普通','良好','優秀'];
 const RATING_COLORS=['','#ff6b6b','#ff9f43','#ffd166','#a8e063','#56ccb2'];
@@ -793,7 +838,7 @@ window.handlePhoto = async function(file) {
       });
     }
     // apply homework
-    cls.students.forEach(s=>{homework[s]=!(parsed.homeworkNotDone||[]).includes(s);});
+    cls.students.forEach(s=>{homework[s]=(parsed.homeworkNotDone||[]).includes(s)?'missing':'done';});
     renderAttendance();renderHomework();renderRatingGrid();renderScoreTable();
     setScores(parsed.scores||{},parsed.maxScore);
     document.getElementById('fDate').value=parsed.date||'';
@@ -862,7 +907,8 @@ function renderHistory(){
     const sickCount=sts.filter(s=>attMap[s]==='sick').length;
     const leaveCount=sts.filter(s=>attMap[s]==='leave').length;
     const absentCount=sts.filter(s=>attMap[s]==='absent').length;
-    const hwMiss=sts.filter(s=>e.homework[s]===false);
+    const hwMiss=sts.filter(s=>hwIsMissing(e.homework?.[s]));
+    const hwPartial=sts.filter(s=>hwIsPartial(e.homework?.[s]));
     const hasScores=sts.some(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null);
     const ratingMap=e.classRating||{};
     const hasRating=sts.some(s=>ratingMap[s]>0);
@@ -880,7 +926,8 @@ function renderHistory(){
           ${lateCount?`<span class="ebadge ebadge-orange">遲到${lateCount}</span>`:''}
           ${sickCount?`<span class="ebadge ebadge-teal">病假${sickCount}</span>`:''}
           ${leaveCount?`<span class="ebadge ebadge-purple">事假${leaveCount}</span>`:''}
-          ${hwMiss.length?`<span class="ebadge ebadge-yellow">未繳${hwMiss.length}</span>`:''}
+          ${hwPartial.length?`<span class="ebadge ebadge-orange">部分缺繳${hwPartial.length}</span>`:''}
+          ${hwMiss.length?`<span class="ebadge ebadge-yellow">缺繳${hwMiss.length}</span>`:''}
           ${hasScores?`<span class="ebadge ebadge-teal">有成績</span>`:''}
           ${avgRating?`<span class="ebadge" style="background:rgba(255,209,102,.2);color:var(--yellow)">⭐${avgRating}</span>`:''}
           <span class="chevron" id="chev-${i}">▼</span>
@@ -888,7 +935,7 @@ function renderHistory(){
       </div>
       <div class="entry-body" id="body-${i}">
         <div class="detail-row"><div class="detail-label">出勤</div><div class="detail-value">${sts.map(s=>{const st=attMap[s]||'present';return `<span class="tag ${ATT_TAG[st]}">${s}：${ATT_LABELS[st]}</span>`;}).join('')}</div></div>
-        <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted);font-size:13px">全部繳交 ✅</span>'}</div></div>
+        <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${(hwPartial.length||hwMiss.length) ? [ ...hwPartial.map(s=>`<span class="tag tag-orange">${s}：部分缺繳 🟠</span>`), ...hwMiss.map(s=>`<span class="tag tag-red">${s}：缺繳 ❌</span>`) ].join('') : '<span style="color:var(--muted);font-size:13px">全部已完成 ✅</span>'}</div></div>
         ${hasScores?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null).map(s=>{const pct=Math.round(e.scores[s]/max*100);const tc=pct>=90?'tag-green':pct>=60?'tag-yellow':'tag-red';return `<span class="tag ${tc}">${s}：${e.scores[s]}/${max}（${pct}%）</span>`;}).join('')}</div></div>`:''}
         ${hasRating?`<div class="detail-row"><div class="detail-label">上課評分</div><div class="detail-value">${sts.filter(s=>ratingMap[s]>0).map(s=>{const r=ratingMap[s];const col=['','#ff6b6b','#ff9f43','#ffd166','#a8e063','#56ccb2'][r];return `<span class="tag" style="background:rgba(255,255,255,.08);color:${col}">${s}：${'⭐'.repeat(r)}（${r}分）</span>`;}).join('')}</div></div>`:''}
         ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value">${e.todayProgress}</div></div>`:''}
@@ -1296,7 +1343,7 @@ window.generateStudentReport = function() {
       html+=`<tr>
         <td style="padding:8px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${attBg[st]}">${attEmoji[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwState==='done'?'✅ 已完成':hwState==='partial'?'🟠 部分缺繳':'❌ 缺繳'}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scoreColor}">${hasScore?`${score}/${max}<br><span style="font-size:11px">${pct}%</span>`:'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayProgress||'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayHomework||'—'}</td>
@@ -1351,7 +1398,7 @@ window.adminRefresh = async function() { await adminLoadAll(); showToast('🔄 �
 function adminRenderOverview() {
   const teacherNames = [...new Set(allEntries.map(e=>e.teacherName))];
   const totalAbsent = allEntries.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
-  const totalHwMiss = allEntries.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
+  const totalHwMiss = allEntries.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>hwIsMissing(v)).length,0);
   document.getElementById('summaryGrid').innerHTML = `
     <div class="summary-card"><div class="summary-num" style="color:var(--teal)">${allEntries.length}</div><div class="summary-lbl">總日誌數</div></div>
     <div class="summary-card"><div class="summary-num" style="color:var(--purple)">${teachers.length}</div><div class="summary-lbl">老師人數</div></div>
@@ -1388,7 +1435,8 @@ window.adminRenderEntries = function() {
 function entryCard(e, prefix) {
   const sts = e.students||Object.keys(e.attendance||{});
   const absent = sts.filter(s=>!e.attendance[s]);
-  const hwMiss = sts.filter(s=>e.homework[s]===false);
+  const hwMiss = sts.filter(s=>hwIsMissing(e.homework?.[s]));
+  const hwPartial = sts.filter(s=>hwIsPartial(e.homework?.[s]));
   const hasScores = sts.some(s=>e.scores?.[s]!=='');
   return `<div class="entry-card">
     <div class="entry-header" onclick="toggleE('${prefix}')">
@@ -1401,7 +1449,7 @@ function entryCard(e, prefix) {
     </div>
     <div class="entry-body" id="body-${prefix}">
       <div class="detail-row"><div class="detail-label">出缺勤</div><div class="detail-value">${sts.map(s=>`<span class="tag ${e.attendance[s]?'tag-green':'tag-red'}">${s}</span>`).join('')}</div></div>
-      <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted);font-size:13px">全部繳交 ✅</span>'}</div></div>
+      <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${(hwPartial.length||hwMiss.length) ? [ ...hwPartial.map(s=>`<span class="tag tag-orange">${s}：部分缺繳 🟠</span>`), ...hwMiss.map(s=>`<span class="tag tag-red">${s}：缺繳 ❌</span>`) ].join('') : '<span style="color:var(--muted);font-size:13px">全部已完成 ✅</span>'}</div></div>
       ${hasScores?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!=="").map(s=>{const max=e.maxScore||100;const pct=Math.round(e.scores[s]/max*100);return `<span class="tag tag-green">${s}:${e.scores[s]}/${max}(${pct}%)</span>`;}).join('')}</div></div>`:''}
       ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value" style="font-size:13px">${e.todayProgress}</div></div>`:''}
       ${e.todayHomework?`<div class="detail-row"><div class="detail-label">作業</div><div class="detail-value" style="font-size:13px">${e.todayHomework}</div></div>`:''}
@@ -1419,7 +1467,7 @@ function adminRenderStats() {
   document.getElementById('statsList').innerHTML = names.map(t=>{
     const te = allEntries.filter(e=>e.teacherName===t);
     const totalAbsent = te.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
-    const totalHwMiss = te.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
+    const totalHwMiss = te.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>hwIsMissing(v)).length,0);
     return `<div class="teacher-stat">
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <span style="font-size:16px;font-weight:900">${t}</span>
@@ -1650,7 +1698,7 @@ window.adminStudentSearch=function(){
       html+=`<tr>
         <td style="padding:8px 10px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${ATT_BG[st]}">${ATT_EMOJI[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwState==='done'?'✅ 已完成':hwState==='partial'?'🟠 部分缺繳':'❌ 缺繳'}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scoreColor}">${hasScore?`${score}/${max}<br><span style="font-size:11px">${pct}%</span>`:'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted);max-width:140px">${e.todayProgress||'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted);max-width:120px">${e.todayHomework||'—'}</td>
@@ -1822,7 +1870,7 @@ window.adminStudentSearch=function(){
       html+=`<tr>
         <td style="padding:8px 10px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${ATT_BG[st]}">${ATT_EMOJI[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwState==='done'?'✅ 已完成':hwState==='partial'?'🟠 部分缺繳':'❌ 缺繳'}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scoreColor}">${hasScore?`${score}/${max}<br><span style="font-size:11px">${pct}%</span>`:'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${ratingColor}">${rating?`${"⭐".repeat(rating)}<br><span style="font-size:11px">${rating}分</span>`:'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted);max-width:140px">${e.todayProgress||'—'}</td>
