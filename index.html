@@ -463,9 +463,12 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
 </div>
 
 <script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
-import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, where, orderBy } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
 
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, where } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
+
+// ── Firebase ──
 const firebaseConfig = {
   apiKey: "AIzaSyBMMEKGuMYdOCglS8_gIx0HpB4u9ClE28s",
   authDomain: "bhcs-journal.firebaseapp.com",
@@ -475,107 +478,144 @@ const firebaseConfig = {
   appId: "1:879408543982:web:833a6ece945e8445125bff"
 };
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const db  = getFirestore(app);
 
-// Attendance states cycle
+// ── Constants ──
 const ATT_STATES = ['present','late','sick','leave','absent'];
-const ATT_LABELS = {present:'出勤',late:'遲到',sick:'病假',leave:'事假',absent:'曠課'};
-const ATT_EMOJI  = {present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'❌'};
-const ATT_BG     = {present:'rgba(86,204,178,.2)',late:'rgba(255,159,67,.2)',sick:'rgba(86,130,204,.2)',leave:'rgba(192,132,252,.2)',absent:'rgba(255,107,107,.2)'};
-const ATT_CLASSES = {present:'att-present',late:'att-late',sick:'att-sick',leave:'att-leave',absent:'att-absent'};
-const ATT_TAG    = {present:'tag-green',late:'tag-orange',sick:'tag-blue',leave:'tag-purple',absent:'tag-red'};
-function normAtt(v){if(v===true||v==='present')return 'present';if(v===false||v==='absent')return 'absent';if(['present','late','sick','leave','absent'].includes(v))return v;return 'present';}
+const ATT_LABELS = {present:'出勤', late:'遲到', sick:'病假', leave:'事假', absent:'曠課'};
+const ATT_EMOJI  = {present:'✅',   late:'🕐',   sick:'🤒',   leave:'📋',   absent:'❌'};
+const ATT_BG     = {present:'rgba(86,204,178,.2)', late:'rgba(255,159,67,.2)', sick:'rgba(86,130,204,.2)', leave:'rgba(192,132,252,.2)', absent:'rgba(255,107,107,.2)'};
+const ATT_CLASSES= {present:'att-present', late:'att-late', sick:'att-sick', leave:'att-leave', absent:'att-absent'};
+const ATT_TAG    = {present:'tag-green',   late:'tag-orange', sick:'tag-blue', leave:'tag-purple', absent:'tag-red'};
+const RATING_COLORS = ['','#ff6b6b','#ff9f43','#ffd166','#a8e063','#56ccb2'];
+const RATING_LABELS = ['','極差','較差','普通','良好','優秀'];
+const ADMIN_USER = 'admin';
+const ADMIN_PASS = 'admin888';
 
-let currentUser = null;
-let myClasses = [];
-let entries = [];
+function normAtt(v) {
+  if (v === true  || v === 'present') return 'present';
+  if (v === false || v === 'absent')  return 'absent';
+  return ATT_STATES.includes(v) ? v : 'present';
+}
+
+// ── State ──
+let currentUser     = null;   // { id, name }
+let myClasses       = [];     // teacher's classes
+let entries         = [];     // teacher's entries
 let currentStudents = [];
-let attendance = {}; // { name: 'present'|'late'|'sick'|'leave'|'absent' }
-let homework = {};
-let classRating = {}; // { name: 1-5 }
+let attendance      = {};
+let homework        = {};
+let classRating     = {};
 
-// ══ LOGIN ══
-const ADMIN_CREDS = { user: 'admin', password: 'admin888' };
-let allEntries = []; // admin use
-let teachers = [];   // admin use
-let deleteTargetId = null;
+// admin state
+let allEntries      = [];
+let teachers        = [];
+let deleteTargetId  = null;
 
+// ── UI Helpers ──
+function showLoading(msg) {
+  document.getElementById('loadingText').textContent = msg || '處理中...';
+  document.getElementById('loadingOverlay').classList.add('show');
+}
+function hideLoading() {
+  document.getElementById('loadingOverlay').classList.remove('show');
+}
+function showToast(msg, type = 'success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+window.showToast = showToast;
+
+// ── LOGIN / LOGOUT ──
 window.login = async function() {
   const userId = document.getElementById('loginUser').value.trim().toLowerCase();
-  const pass = document.getElementById('loginPass').value;
+  const pass   = document.getElementById('loginPass').value;
+  document.getElementById('loginError').style.display = 'none';
+
+  // Admin login (no Firestore needed)
+  if (userId === ADMIN_USER && pass === ADMIN_PASS) {
+    showPage('admin');
+    adminLoadAll();
+    return;
+  }
+
+  // Teacher login
   showLoading('驗證中...');
   try {
-    // Check if admin
-    if (userId === ADMIN_CREDS.user && pass === ADMIN_CREDS.password) {
-      document.getElementById('loginPage').style.display = 'none';
-      document.getElementById('adminPage').style.display = 'block';
-      await adminLoadAll();
-      hideLoading(); return;
-    }
-    // Check teacher
-    const snap = await getDocs(query(collection(db,'teachers'), where('userId','==',userId)));
-    if (!snap.empty) {
+    const snap = await getDocs(query(collection(db, 'teachers'), where('userId', '==', userId)));
+    hideLoading();
+    if (!snap.empty && snap.docs[0].data().password === pass) {
       const t = snap.docs[0].data();
-      if (t.password === pass) {
-        currentUser = {id:userId, name:t.name};
-        document.getElementById('loginPage').style.display = 'none';
-        document.getElementById('appPage').style.display = 'block';
-        document.getElementById('teacherBadge').textContent = t.name;
-        const k = localStorage.getItem('openaiKey');
-        if (k) document.getElementById('apiKey').value = k;
-        await Promise.all([loadClasses(), loadEntries()]);
-        hideLoading(); return;
-      }
+      currentUser = { id: userId, name: t.name };
+      showPage('teacher');
+      document.getElementById('teacherBadge').textContent = t.name;
+      const k = localStorage.getItem('openaiKey');
+      if (k) document.getElementById('apiKey').value = k;
+      loadClasses();
+      loadEntries();
+    } else {
+      document.getElementById('loginError').style.display = 'block';
     }
-    document.getElementById('loginError').style.display = 'block';
-  } catch(e) { showToast('❌ 登入失敗：'+e.message,'error'); }
-  hideLoading();
+  } catch(e) {
+    hideLoading();
+    showToast('連線失敗，請檢查網路', 'error');
+    console.error(e);
+  }
 };
 
 window.logout = function() {
-  currentUser=null; myClasses=[]; entries=[];
-  document.getElementById('loginPage').style.display='block';
-  document.getElementById('appPage').style.display='none';
-  document.getElementById('adminPage').style.display='none';
-  document.getElementById('loginUser').value='';
-  document.getElementById('loginPass').value='';
+  currentUser = null; myClasses = []; entries = []; allEntries = []; teachers = [];
+  showPage('login');
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
 };
 
-// ══ TABS ══
+function showPage(page) {
+  document.getElementById('loginPage').style.display = page === 'login'   ? 'block' : 'none';
+  document.getElementById('appPage').style.display   = page === 'teacher' ? 'block' : 'none';
+  document.getElementById('adminPage').style.display = page === 'admin'   ? 'block' : 'none';
+}
+
+// ── TEACHER TABS ──
 window.switchTab = function(name, el) {
-  ['journal','classes','history','report'].forEach(t=>document.getElementById('tab-'+t).style.display='none');
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.getElementById('tab-'+name).style.display='block';
+  ['journal','classes','history','report'].forEach(t => document.getElementById('tab-'+t).style.display = 'none');
+  document.querySelectorAll('#appPage .tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-'+name).style.display = 'block';
   el.classList.add('active');
-  if(name==='classes') renderClassList();
-  if(name==='history'){ loadEntries().then(renderHistory); }
-  if(name==='report'){ loadEntries().then(()=>{ renderReportClassList(); renderStudentQuickPick(); }); }
+  if (name === 'classes') renderClassList();
+  if (name === 'history') { loadEntries().then(renderHistory); }
+  if (name === 'report')  { loadEntries().then(() => { renderReportClassList(); renderStudentQuickPick(); }); }
 };
 
-// ══ CLASSES ══
+// ── CLASS MANAGEMENT ──
 async function loadClasses() {
-  const snap = await getDocs(query(collection(db,'classes'), where('teacherId','==',currentUser.id)));
-  myClasses = snap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
-  refreshClassSelect();
+  try {
+    const snap = await getDocs(query(collection(db,'classes'), where('teacherId','==',currentUser.id)));
+    myClasses = snap.docs.map(d => ({_id:d.id,...d.data()})).sort((a,b) => (a.createdAt||0)-(b.createdAt||0));
+    refreshClassSelect();
+  } catch(e) { console.error('loadClasses:', e); }
 }
 
 function refreshClassSelect() {
   const sel = document.getElementById('journalClassSelect');
   sel.innerHTML = '<option value="">-- 請選擇班級 --</option>' +
-    myClasses.map(c=>`<option value="${c._id}">${c.name}（${c.students.length}人）</option>`).join('');
+    myClasses.map(c => `<option value="${c._id}">${c.name}（${c.students.length}人）</option>`).join('');
 }
 
 function renderClassList() {
   const el = document.getElementById('classList');
   if (!myClasses.length) {
-    el.innerHTML='<div class="empty"><div class="empty-icon">🏫</div><div>還沒有班級，點上方「新增班級」開始</div></div>';
+    el.innerHTML = '<div class="empty"><div class="empty-icon">🏫</div><div>還沒有班級</div></div>';
     return;
   }
-  el.innerHTML = myClasses.map(c=>`
+  el.innerHTML = myClasses.map(c => `
     <div class="class-card">
       <div style="flex:1">
         <div class="class-name">${c.name}</div>
-        <div class="class-meta">${c.students.length} 位學生：${c.students.slice(0,5).join('、')}${c.students.length>5?'…':''}</div>
+        <div class="class-meta">${c.students.length}人：${c.students.slice(0,5).join('、')}${c.students.length>5?'…':''}</div>
       </div>
       <div style="display:flex;gap:6px">
         <button class="btn btn-ghost btn-sm" onclick="openClassModal('${c._id}')">✏️ 編輯</button>
@@ -585,123 +625,119 @@ function renderClassList() {
 }
 
 window.openClassModal = function(classId) {
-  const cls = classId ? myClasses.find(c=>c._id===classId) : null;
-  document.getElementById('classModalTitle').textContent = cls?'編輯班級':'新增班級';
-  document.getElementById('editClassId').value = classId||'';
-  document.getElementById('className').value = cls?.name||'';
+  const cls = classId ? myClasses.find(c => c._id === classId) : null;
+  document.getElementById('classModalTitle').textContent = cls ? '編輯班級' : '新增班級';
+  document.getElementById('editClassId').value = classId || '';
+  document.getElementById('className').value = cls?.name || '';
   const list = document.getElementById('classStudentList');
-  list.innerHTML='';
-  (cls?.students||['','']).forEach(s=>addClassStudentRow(s));
+  list.innerHTML = '';
+  (cls?.students || ['','']).forEach(s => addClassStudentRow(s));
   document.getElementById('classModal').classList.add('show');
 };
-window.closeClassModal = function(){document.getElementById('classModal').classList.remove('show');};
-window.addClassStudent = function(){addClassStudentRow('');};
+window.closeClassModal = function() { document.getElementById('classModal').classList.remove('show'); };
+window.addClassStudent = function() { addClassStudentRow(''); };
+
 function addClassStudentRow(val='') {
-  const row=document.createElement('div');
-  row.className='student-build-row';
-  row.innerHTML=`<input class="student-build-input" placeholder="學生姓名" value="${val}" onkeydown="if(event.key==='Enter'){event.preventDefault();addClassStudent();}">
+  const row = document.createElement('div');
+  row.className = 'student-build-row';
+  row.innerHTML = `<input class="student-build-input" placeholder="學生姓名" value="${val}" onkeydown="if(event.key==='Enter'){event.preventDefault();addClassStudent();}">
     <button class="btn-del" onclick="this.parentElement.remove()">✕</button>`;
   document.getElementById('classStudentList').appendChild(row);
-  if(!val) row.querySelector('input').focus();
+  if (!val) row.querySelector('input').focus();
 }
 
 window.saveClass = async function() {
   const name = document.getElementById('className').value.trim();
-  if(!name){showToast('請輸入班級名稱','error');return;}
-  const students=[...document.querySelectorAll('.student-build-input')].map(i=>i.value.trim()).filter(Boolean);
-  if(!students.length){showToast('請至少新增一位學生','error');return;}
-  const classId=document.getElementById('editClassId').value;
+  if (!name) { showToast('請輸入班級名稱','error'); return; }
+  const students = [...document.querySelectorAll('.student-build-input')].map(i=>i.value.trim()).filter(Boolean);
+  if (!students.length) { showToast('請至少新增一位學生','error'); return; }
+  const classId = document.getElementById('editClassId').value;
   showLoading('儲存班級...');
   try {
-    if(classId){
-      await updateDoc(doc(db,'classes',classId),{name,students});
-      const idx=myClasses.findIndex(c=>c._id===classId);
-      if(idx>=0) myClasses[idx]={...myClasses[idx],name,students};
-      showToast('✅ 班級已更新');
+    if (classId) {
+      await updateDoc(doc(db,'classes',classId), {name, students});
+      const idx = myClasses.findIndex(c => c._id === classId);
+      if (idx >= 0) myClasses[idx] = {...myClasses[idx], name, students};
     } else {
-      const ref=await addDoc(collection(db,'classes'),{teacherId:currentUser.id,name,students,createdAt:Date.now()});
-      myClasses.push({_id:ref.id,teacherId:currentUser.id,name,students,createdAt:Date.now()});
-      showToast('✅ 班級已新增');
+      const ref = await addDoc(collection(db,'classes'), {teacherId:currentUser.id, name, students, createdAt:Date.now()});
+      myClasses.push({_id:ref.id, teacherId:currentUser.id, name, students, createdAt:Date.now()});
     }
     closeClassModal(); refreshClassSelect(); renderClassList();
-  } catch(e){showToast('❌ '+e.message,'error');}
+    showToast('✅ 班級已儲存');
+  } catch(e) { showToast('❌ '+e.message,'error'); }
   hideLoading();
 };
 
-window.deleteClass = async function(id,name) {
-  if(!confirm(`確定刪除班級「${name}」？`))return;
+window.deleteClass = async function(id, name) {
+  if (!confirm(`確定刪除班級「${name}」？`)) return;
   showLoading('刪除中...');
-  try{
+  try {
     await deleteDoc(doc(db,'classes',id));
-    myClasses=myClasses.filter(c=>c._id!==id);
-    refreshClassSelect();renderClassList();showToast('🗑 已刪除');
-  }catch(e){showToast('❌ '+e.message,'error');}
+    myClasses = myClasses.filter(c => c._id !== id);
+    refreshClassSelect(); renderClassList(); showToast('🗑 已刪除');
+  } catch(e) { showToast('❌ '+e.message,'error'); }
   hideLoading();
 };
 
-// ══ JOURNAL FORM ══
+// ── JOURNAL FORM ──
 window.onClassSelect = function() {
-  const id=document.getElementById('journalClassSelect').value;
-  const cls=myClasses.find(c=>c._id===id);
-  if(!cls){document.getElementById('journalForm').style.display='none';return;}
-  currentStudents=[...cls.students];
-  attendance={};homework={};classRating={};
-  currentStudents.forEach(s=>{attendance[s]='present';homework[s]=true;classRating[s]=0;});
-  document.getElementById('selectedClassInfo').style.display='block';
-  document.getElementById('selectedClassInfo').textContent=`班級：${cls.name}　學生：${cls.students.join('、')}`;
-  document.getElementById('journalForm').style.display='block';
-  document.getElementById('uploadContent').innerHTML='<div style="font-size:32px;margin-bottom:6px;">📷</div><div style="color:var(--teal);font-weight:700;font-size:14px;">點擊或拖曳上傳日誌照片（選用）</div><div style="color:var(--muted);font-size:12px;margin-top:4px;">AI 自動識別出缺勤、作業、成績</div>';
+  const id  = document.getElementById('journalClassSelect').value;
+  const cls = myClasses.find(c => c._id === id);
+  if (!cls) { document.getElementById('journalForm').style.display='none'; return; }
 
-  // Auto-fill today's date and weekday (editable)
+  currentStudents = [...cls.students];
+  attendance  = {}; homework = {}; classRating = {};
+  currentStudents.forEach(s => { attendance[s]='present'; homework[s]=true; classRating[s]=0; });
+
+  // Auto-fill today
   const now = new Date();
-  const mm = String(now.getMonth()+1).padStart(2,'0');
-  const dd = String(now.getDate()).padStart(2,'0');
-  const weekdays = ['日','一','二','三','四','五','六'];
-  document.getElementById('fDate').value = `${mm}/${dd}`;
-  document.getElementById('fWeekday').value = weekdays[now.getDay()];
+  const mm  = String(now.getMonth()+1).padStart(2,'0');
+  const dd  = String(now.getDate()).padStart(2,'0');
+  document.getElementById('fDate').value    = `${mm}/${dd}`;
+  document.getElementById('fWeekday').value = ['日','一','二','三','四','五','六'][now.getDay()];
+  ['fProgress','fHomework','fNextExam','fNotes'].forEach(id => document.getElementById(id).value='');
+  document.getElementById('maxScore').value = '100';
 
-  ['fProgress','fHomework','fNextExam','fNotes'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('maxScore').value='100';
-  renderAttendance();renderHomework();renderRatingGrid();renderScoreTable();
+  document.getElementById('selectedClassInfo').style.display  = 'block';
+  document.getElementById('selectedClassInfo').textContent = `班級：${cls.name}　學生：${cls.students.join('、')}`;
+  document.getElementById('journalForm').style.display = 'block';
+  document.getElementById('uploadContent').innerHTML = '<div style="font-size:32px;margin-bottom:6px">📷</div><div style="color:var(--teal);font-weight:700;font-size:14px">點擊或拖曳上傳日誌照片（選用）</div><div style="color:var(--muted);font-size:12px;margin-top:4px">AI 自動識別出缺勤、作業、成績</div>';
+
+  renderAttendance(); renderHomework(); renderRatingGrid(); renderScoreTable();
 };
 
-window.updateScoreHeader=function(){
-  const max=document.getElementById('maxScore').value||'100';
-  document.getElementById('scoreHeader').textContent=`成績（/${max}）`;
+window.updateScoreHeader = function() {
+  const max = document.getElementById('maxScore').value || '100';
+  document.getElementById('scoreHeader').textContent = `成績（/${max}）`;
 };
 
-// Attendance – click cycles through 5 states
 function renderAttendance() {
-  document.getElementById('attendanceGrid').innerHTML = currentStudents.map(s=>{
-    const st=attendance[s]||'present';
-    return `<div class="att-chip ${ATT_CLASSES[st]}" onclick="cycleAtt('${s}')">
+  document.getElementById('attendanceGrid').innerHTML = currentStudents.map(s => `
+    <div class="att-chip ${ATT_CLASSES[attendance[s]||'present']}" onclick="cycleAtt('${s}')">
       <span class="chip-name">${s}</span>
-      <span class="att-status">${ATT_LABELS[st]}</span>
-    </div>`;
-  }).join('');
+      <span class="att-status">${ATT_LABELS[attendance[s]||'present']}</span>
+    </div>`).join('');
 }
 window.cycleAtt = function(s) {
-  const idx=ATT_STATES.indexOf(attendance[s]||'present');
-  attendance[s]=ATT_STATES[(idx+1)%ATT_STATES.length];
+  const idx = ATT_STATES.indexOf(attendance[s]||'present');
+  attendance[s] = ATT_STATES[(idx+1) % ATT_STATES.length];
   renderAttendance();
 };
 
 function renderHomework() {
-  document.getElementById('homeworkGrid').innerHTML = currentStudents.map(s=>`
+  document.getElementById('homeworkGrid').innerHTML = currentStudents.map(s => `
     <div class="hw-chip ${homework[s]?'hw-done':'hw-miss'}" onclick="toggleH('${s}')">
       <span style="font-size:18px">${homework[s]?'✅':'⚠️'}</span>
       <span class="chip-name">${s}</span>
     </div>`).join('');
 }
-window.toggleH=function(s){homework[s]=!homework[s];renderHomework();};
+window.toggleH = function(s) { homework[s]=!homework[s]; renderHomework(); };
 
-const RATING_LABELS=['','極差','較差','普通','良好','優秀'];
-const RATING_COLORS=['','#ff6b6b','#ff9f43','#ffd166','#a8e063','#56ccb2'];
-function renderRatingGrid(){
-  const el=document.getElementById('ratingGrid');
-  if(!el) return;
-  el.innerHTML=currentStudents.map(s=>{
-    const r=classRating[s]||0;
+function renderRatingGrid() {
+  const el = document.getElementById('ratingGrid');
+  if (!el) return;
+  el.innerHTML = currentStudents.map(s => {
+    const r = classRating[s] || 0;
     return `<div class="rating-row">
       <span class="rating-name">${s}</span>
       <div class="rating-stars">
@@ -711,70 +747,68 @@ function renderRatingGrid(){
     </div>`;
   }).join('');
 }
-window.setRating=function(s,val){
-  classRating[s]= classRating[s]===val ? 0 : val; // click same star to clear
+window.setRating = function(s, val) {
+  classRating[s] = classRating[s] === val ? 0 : val;
   renderRatingGrid();
 };
 
 function renderScoreTable() {
-  // Use index-based IDs to avoid collisions with Chinese/special characters
-  document.getElementById('scoreBody').innerHTML = currentStudents.map((s,i)=>`
+  document.getElementById('scoreBody').innerHTML = currentStudents.map((s,i) => `
     <tr>
-      <td style="font-weight:700">${s}</td>
-      <td><input type="number" class="score-input" id="sc_${i}" placeholder="—" min="0" oninput="updateScorePct(${i})"></td>
-      <td id="pct_${i}" style="color:var(--muted);font-size:12px">—</td>
+      <td style="font-weight:700;padding:8px 10px;border:1px solid var(--border)">${s}</td>
+      <td style="padding:6px 10px;border:1px solid var(--border)">
+        <input type="number" class="score-input" id="sc_${i}" placeholder="—" min="0" oninput="updateScorePct(${i})">
+      </td>
+      <td id="pct_${i}" style="padding:8px 10px;border:1px solid var(--border);color:var(--muted);font-size:12px">—</td>
     </tr>`).join('');
 }
-window.updateScorePct=function(i){
-  const max=parseFloat(document.getElementById('maxScore').value)||100;
-  const val=parseFloat(document.getElementById('sc_'+i)?.value);
-  const el=document.getElementById('pct_'+i);
-  if(!el)return;
-  if(isNaN(val)){el.textContent='—';el.style.color='var(--muted)';return;}
-  const pct=Math.round(val/max*100);
-  el.textContent=pct+'%';
-  el.style.color=pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
+window.updateScorePct = function(i) {
+  const max = parseFloat(document.getElementById('maxScore').value)||100;
+  const val = parseFloat(document.getElementById('sc_'+i)?.value);
+  const el  = document.getElementById('pct_'+i);
+  if (!el) return;
+  if (isNaN(val)) { el.textContent='—'; el.style.color='var(--muted)'; return; }
+  const pct = Math.round(val/max*100);
+  el.textContent = pct+'%';
+  el.style.color = pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
 };
-function getScores(){
-  const o={};
-  currentStudents.forEach((s,i)=>{
-    const v=document.getElementById('sc_'+i)?.value;
-    o[s]=v===''||v===undefined?'':v;
-  });
+function getScores() {
+  const o = {};
+  currentStudents.forEach((s,i) => { const v=document.getElementById('sc_'+i)?.value; o[s]=v===''||v==null?'':v; });
   return o;
 }
-function setScores(sc,max){
-  if(max){document.getElementById('maxScore').value=max;updateScoreHeader();}
-  currentStudents.forEach((s,i)=>{
-    const el=document.getElementById('sc_'+i);
-    if(el&&sc[s]!=null&&sc[s]!==''){el.value=sc[s];updateScorePct(i);}
+function setScores(sc, max) {
+  if (max) { document.getElementById('maxScore').value=max; updateScoreHeader(); }
+  currentStudents.forEach((s,i) => {
+    const el = document.getElementById('sc_'+i);
+    if (el && sc[s]!=null && sc[s]!=='') { el.value=sc[s]; updateScorePct(i); }
   });
 }
 
-// ══ PHOTO ══
-window.handleDragOver=e=>{e.preventDefault();document.getElementById('uploadZone').classList.add('dragover');};
-window.handleDragLeave=()=>document.getElementById('uploadZone').classList.remove('dragover');
-window.handleDrop=e=>{e.preventDefault();document.getElementById('uploadZone').classList.remove('dragover');const f=e.dataTransfer.files[0];if(f)handlePhoto(f);};
+// ── PHOTO ──
+window.handleDragOver = e => { e.preventDefault(); document.getElementById('uploadZone').classList.add('dragover'); };
+window.handleDragLeave = () => document.getElementById('uploadZone').classList.remove('dragover');
+window.handleDrop = e => { e.preventDefault(); document.getElementById('uploadZone').classList.remove('dragover'); const f=e.dataTransfer.files[0]; if(f) handlePhoto(f); };
 
 window.handlePhoto = async function(file) {
-  if(!file)return;
-  const apiKey=document.getElementById('apiKey').value.trim();
-  if(!apiKey){showToast('請先填入 OpenAI API Key','error');return;}
-  const clsId=document.getElementById('journalClassSelect').value;
-  const cls=myClasses.find(c=>c._id===clsId);
-  if(!cls){showToast('請先選擇班級','error');return;}
-  const url=URL.createObjectURL(file);
-  document.getElementById('uploadContent').innerHTML=`<img src="${url}" style="height:55px;border-radius:8px;object-fit:cover"><div style="color:var(--teal);font-weight:700;font-size:13px;margin-top:6px">已上傳，點擊更換</div>`;
+  if (!file) return;
+  const apiKey = document.getElementById('apiKey').value.trim();
+  if (!apiKey) { showToast('請先填入 OpenAI API Key','error'); return; }
+  const clsId = document.getElementById('journalClassSelect').value;
+  const cls   = myClasses.find(c => c._id === clsId);
+  if (!cls) { showToast('請先選擇班級','error'); return; }
+
+  const url = URL.createObjectURL(file);
+  document.getElementById('uploadContent').innerHTML = `<img src="${url}" style="height:55px;border-radius:8px;object-fit:cover"><div style="color:var(--teal);font-weight:700;font-size:13px;margin-top:6px">已上傳，點擊更換</div>`;
   showLoading('GPT-4o 辨識中...');
-  try{
-    const b64=await toBase64(file);
-    const prompt=`你是教室日誌辨識助手。請仔細辨識這張手寫教室日誌照片。
-本班學生名單：${cls.students.join('、')}
-出勤狀態說明：present=出勤、late=遲到、sick=病假、leave=事假、absent=曠課（若標示全到則全部為present）
-請回傳純JSON（不加markdown）：
-{"date":"MM/DD","weekday":"一二三四五六日之一","attendance":{"學生姓名":"present|late|sick|leave|absent"},"homeworkNotDone":["未繳作業學生"],"scores":{"姓名":數字或null},"maxScore":滿分數字,"todayProgress":"本日進度","todayHomework":"本日作業","nextExam":"下次考試","notes":"備註"}
-只回傳JSON。`;
-    const res=await fetch('https://api.openai.com/v1/chat/completions',{
+  try {
+    const b64 = await toBase64(file);
+    const prompt = `你是教室日誌辨識助手。本班學生：${cls.students.join('、')}
+出勤：present=出勤、late=遲到、sick=病假、leave=事假、absent=曠課
+回傳純JSON（不加markdown）：
+{"date":"MM/DD","weekday":"一二三四五六日","attendance":{"姓名":"present|late|sick|leave|absent"},"homeworkNotDone":["未繳作業學生"],"scores":{"姓名":數字或null},"maxScore":滿分,"todayProgress":"進度","todayHomework":"作業","nextExam":"下次考試","notes":"備註"}`;
+
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':`Bearer ${apiKey}`},
       body:JSON.stringify({model:'gpt-4o',max_tokens:1500,messages:[{role:'user',content:[
@@ -782,92 +816,90 @@ window.handlePhoto = async function(file) {
         {type:'text',text:prompt}
       ]}]})
     });
-    const data=await res.json();
-    if(data.error)throw new Error(data.error.message);
-    const parsed=JSON.parse((data.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim());
-    // apply attendance
-    if(parsed.attendance){
-      cls.students.forEach(s=>{
-        const st=parsed.attendance[s];
-        attendance[s]=ATT_STATES.includes(st)?st:'present';
-      });
-    }
-    // apply homework
-    cls.students.forEach(s=>{homework[s]=!(parsed.homeworkNotDone||[]).includes(s);});
-    renderAttendance();renderHomework();renderRatingGrid();renderScoreTable();
-    setScores(parsed.scores||{},parsed.maxScore);
-    document.getElementById('fDate').value=parsed.date||'';
-    document.getElementById('fWeekday').value=parsed.weekday||'';
-    document.getElementById('fProgress').value=parsed.todayProgress||'';
-    document.getElementById('fHomework').value=parsed.todayHomework||'';
-    document.getElementById('fNextExam').value=parsed.nextExam||'';
-    document.getElementById('fNotes').value=parsed.notes||'';
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    const parsed = JSON.parse((data.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim());
+
+    cls.students.forEach(s => {
+      attendance[s] = normAtt(parsed.attendance?.[s]);
+      homework[s]   = !(parsed.homeworkNotDone||[]).includes(s);
+    });
+    renderAttendance(); renderHomework(); renderRatingGrid(); renderScoreTable();
+    setScores(parsed.scores||{}, parsed.maxScore);
+    document.getElementById('fDate').value    = parsed.date||'';
+    document.getElementById('fWeekday').value = parsed.weekday||'';
+    document.getElementById('fProgress').value = parsed.todayProgress||'';
+    document.getElementById('fHomework').value = parsed.todayHomework||'';
+    document.getElementById('fNextExam').value = parsed.nextExam||'';
+    document.getElementById('fNotes').value    = parsed.notes||'';
     showToast('✅ 辨識完成，請確認後儲存');
-  }catch(e){showToast('❌ '+(e.message||'辨識失敗'),'error');}
+  } catch(e) { showToast('❌ '+(e.message||'辨識失敗'),'error'); }
   hideLoading();
 };
-function toBase64(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(f);});}
-
-// ══ SAVE ══
-window.saveEntry = async function() {
-  const clsId=document.getElementById('journalClassSelect').value;
-  const cls=myClasses.find(c=>c._id===clsId);
-  const date=document.getElementById('fDate').value.trim();
-  if(!cls){showToast('請選擇班級','error');return;}
-  if(!date){showToast('請填寫日期','error');return;}
-  const maxScore=parseFloat(document.getElementById('maxScore').value)||100;
-  showLoading('儲存至雲端...');
-  try{
-    const entry={
-      teacherId:currentUser.id,teacherName:currentUser.name,
-      classId:clsId,className:cls.name,
-      date,weekday:document.getElementById('fWeekday').value,
-      students:[...currentStudents],
-      attendance:{...attendance},homework:{...homework},
-      scores:getScores(),maxScore,classRating:{...classRating},
-      todayProgress:document.getElementById('fProgress').value,
-      todayHomework:document.getElementById('fHomework').value,
-      nextExam:document.getElementById('fNextExam').value,
-      notes:document.getElementById('fNotes').value,
-      savedAt:Date.now()
-    };
-    const existing=entries.find(e=>e.date===date&&e.classId===clsId);
-    if(existing?._id) await updateDoc(doc(db,'entries',existing._id),entry);
-    else await addDoc(collection(db,'entries'),entry);
-    showToast('☁️ 已儲存至雲端！');
-    document.getElementById('journalClassSelect').value='';
-    document.getElementById('journalForm').style.display='none';
-    document.getElementById('selectedClassInfo').style.display='none';
-    await loadEntries();
-  }catch(e){showToast('❌ '+e.message,'error');}
-  hideLoading();
-};
-
-// ══ ENTRIES ══
-async function loadEntries(){
-  try{
-    const snap=await getDocs(query(collection(db,'entries'),where('teacherId','==',currentUser.id)));
-    entries=snap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
-  }catch(e){console.error(e);}
+function toBase64(f) {
+  return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(f);});
 }
 
+// ── SAVE ENTRY ──
+window.saveEntry = async function() {
+  const clsId = document.getElementById('journalClassSelect').value;
+  const cls   = myClasses.find(c => c._id === clsId);
+  const date  = document.getElementById('fDate').value.trim();
+  if (!cls)  { showToast('請選擇班級','error'); return; }
+  if (!date) { showToast('請填寫日期','error'); return; }
 
-function renderHistory(){
-  const el=document.getElementById('historyList');
-  if(!entries.length){el.innerHTML='<div class="empty"><div class="empty-icon">📭</div><div>還沒有日誌記錄</div></div>';return;}
-  el.innerHTML=entries.map((e,i)=>{
-    const sts=e.students||[];
-    const attMap=e.attendance||{};
-    const lateCount=sts.filter(s=>attMap[s]==='late').length;
-    const sickCount=sts.filter(s=>attMap[s]==='sick').length;
-    const leaveCount=sts.filter(s=>attMap[s]==='leave').length;
-    const absentCount=sts.filter(s=>attMap[s]==='absent').length;
-    const hwMiss=sts.filter(s=>e.homework[s]===false);
-    const hasScores=sts.some(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null);
-    const ratingMap=e.classRating||{};
-    const hasRating=sts.some(s=>ratingMap[s]>0);
-    const avgRating=hasRating?( sts.filter(s=>ratingMap[s]>0).reduce((a,s)=>a+(ratingMap[s]||0),0) / sts.filter(s=>ratingMap[s]>0).length ).toFixed(1):null;
-    const max=e.maxScore||100;
+  const maxScore = parseFloat(document.getElementById('maxScore').value)||100;
+  const entry = {
+    teacherId:currentUser.id, teacherName:currentUser.name,
+    classId:clsId, className:cls.name,
+    date, weekday:document.getElementById('fWeekday').value,
+    students:[...currentStudents],
+    attendance:{...attendance}, homework:{...homework},
+    scores:getScores(), maxScore, classRating:{...classRating},
+    todayProgress:document.getElementById('fProgress').value,
+    todayHomework:document.getElementById('fHomework').value,
+    nextExam:document.getElementById('fNextExam').value,
+    notes:document.getElementById('fNotes').value,
+    savedAt:Date.now()
+  };
+
+  showLoading('儲存至雲端...');
+  try {
+    const existing = entries.find(e => e.date===date && e.classId===clsId);
+    if (existing?._id) await updateDoc(doc(db,'entries',existing._id), entry);
+    else await addDoc(collection(db,'entries'), entry);
+    showToast('☁️ 已儲存至雲端！');
+    document.getElementById('journalClassSelect').value = '';
+    document.getElementById('journalForm').style.display = 'none';
+    document.getElementById('selectedClassInfo').style.display = 'none';
+    await loadEntries();
+  } catch(e) { showToast('❌ '+e.message,'error'); }
+  hideLoading();
+};
+
+// ── LOAD ENTRIES ──
+async function loadEntries() {
+  try {
+    const snap = await getDocs(query(collection(db,'entries'), where('teacherId','==',currentUser.id)));
+    entries = snap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
+  } catch(e) { console.error('loadEntries:', e); }
+}
+
+// ── HISTORY ──
+function renderHistory() {
+  const el = document.getElementById('historyList');
+  if (!entries.length) { el.innerHTML='<div class="empty"><div class="empty-icon">📭</div><div>還沒有日誌記錄</div></div>'; return; }
+  el.innerHTML = entries.map((e,i) => {
+    const sts = e.students||[];
+    const attMap = e.attendance||{};
+    const hwMiss = sts.filter(s => e.homework[s]===false);
+    const absentCount = sts.filter(s => normAtt(attMap[s])==='absent').length;
+    const lateCount   = sts.filter(s => attMap[s]==='late').length;
+    const hasScores   = sts.some(s => e.scores?.[s]!==''&&e.scores?.[s]!=null);
+    const ratingMap   = e.classRating||{};
+    const ratedStudents = sts.filter(s => ratingMap[s]>0);
+    const avgRating   = ratedStudents.length ? (ratedStudents.reduce((a,s)=>a+(ratingMap[s]||0),0)/ratedStudents.length).toFixed(1) : null;
+    const max = e.maxScore||100;
     return `<div class="entry-card">
       <div class="entry-header" onclick="toggleE(${i})">
         <div>
@@ -878,8 +910,6 @@ function renderHistory(){
         <div class="entry-badges">
           ${absentCount?`<span class="ebadge ebadge-red">曠課${absentCount}</span>`:''}
           ${lateCount?`<span class="ebadge ebadge-orange">遲到${lateCount}</span>`:''}
-          ${sickCount?`<span class="ebadge ebadge-teal">病假${sickCount}</span>`:''}
-          ${leaveCount?`<span class="ebadge ebadge-purple">事假${leaveCount}</span>`:''}
           ${hwMiss.length?`<span class="ebadge ebadge-yellow">未繳${hwMiss.length}</span>`:''}
           ${hasScores?`<span class="ebadge ebadge-teal">有成績</span>`:''}
           ${avgRating?`<span class="ebadge" style="background:rgba(255,209,102,.2);color:var(--yellow)">⭐${avgRating}</span>`:''}
@@ -887,10 +917,10 @@ function renderHistory(){
         </div>
       </div>
       <div class="entry-body" id="body-${i}">
-        <div class="detail-row"><div class="detail-label">出勤</div><div class="detail-value">${sts.map(s=>{const st=attMap[s]||'present';return `<span class="tag ${ATT_TAG[st]}">${s}：${ATT_LABELS[st]}</span>`;}).join('')}</div></div>
-        <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted);font-size:13px">全部繳交 ✅</span>'}</div></div>
+        <div class="detail-row"><div class="detail-label">出勤</div><div class="detail-value">${sts.map(s=>`<span class="tag ${ATT_TAG[normAtt(attMap[s])]}">${s}：${ATT_LABELS[normAtt(attMap[s])]}</span>`).join('')}</div></div>
+        <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted)">全部繳交 ✅</span>'}</div></div>
+        ${ratedStudents.length?`<div class="detail-row"><div class="detail-label">上課評分</div><div class="detail-value">${ratedStudents.map(s=>{const r=ratingMap[s];return `<span class="tag" style="background:rgba(255,255,255,.07);color:${RATING_COLORS[r]}">${s}：${'⭐'.repeat(r)}（${r}分）</span>`;}).join('')}</div></div>`:''}
         ${hasScores?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null).map(s=>{const pct=Math.round(e.scores[s]/max*100);const tc=pct>=90?'tag-green':pct>=60?'tag-yellow':'tag-red';return `<span class="tag ${tc}">${s}：${e.scores[s]}/${max}（${pct}%）</span>`;}).join('')}</div></div>`:''}
-        ${hasRating?`<div class="detail-row"><div class="detail-label">上課評分</div><div class="detail-value">${sts.filter(s=>ratingMap[s]>0).map(s=>{const r=ratingMap[s];const col=['','#ff6b6b','#ff9f43','#ffd166','#a8e063','#56ccb2'][r];return `<span class="tag" style="background:rgba(255,255,255,.08);color:${col}">${s}：${'⭐'.repeat(r)}（${r}分）</span>`;}).join('')}</div></div>`:''}
         ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value">${e.todayProgress}</div></div>`:''}
         ${e.todayHomework?`<div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${e.todayHomework}</div></div>`:''}
         ${e.nextExam?`<div class="detail-row"><div class="detail-label">考試</div><div class="detail-value" style="color:var(--red);font-weight:700">${e.nextExam}</div></div>`:''}
@@ -903,401 +933,278 @@ function renderHistory(){
     </div>`;
   }).join('');
 }
-window.toggleE=i=>{document.getElementById('body-'+i).classList.toggle('open');document.getElementById('chev-'+i).classList.toggle('open');};
-
-window.editEntry=function(i){
-  const e=entries[i];
-  const cls=myClasses.find(c=>c._id===e.classId);
-  document.getElementById('journalClassSelect').value=e.classId||'';
-  if(cls){
-    currentStudents=[...cls.students];
-    attendance={...e.attendance};
-    homework={...e.homework};
-    classRating={...(e.classRating||{})};
-    document.getElementById('selectedClassInfo').style.display='block';
-    document.getElementById('selectedClassInfo').textContent=`班級：${cls.name}　學生：${cls.students.join('、')}`;
-    document.getElementById('journalForm').style.display='block';
-    renderAttendance();renderHomework();renderRatingGrid();renderScoreTable();setScores(e.scores||{},e.maxScore);
-  }
-  document.getElementById('fDate').value=e.date||'';
-  document.getElementById('fWeekday').value=e.weekday||'';
-  document.getElementById('fProgress').value=e.todayProgress||'';
-  document.getElementById('fHomework').value=e.todayHomework||'';
-  document.getElementById('fNextExam').value=e.nextExam||'';
-  document.getElementById('fNotes').value=e.notes||'';
-  document.querySelectorAll('.tab')[0].click();window.scrollTo(0,0);
+window.toggleE = i => {
+  document.getElementById('body-'+i).classList.toggle('open');
+  document.getElementById('chev-'+i).classList.toggle('open');
 };
-
-window.delEntry=async function(i){
-  if(!confirm('確定刪除此日誌？'))return;
+window.editEntry = function(i) {
+  const e   = entries[i];
+  const cls = myClasses.find(c => c._id === e.classId);
+  document.getElementById('journalClassSelect').value = e.classId||'';
+  if (cls) {
+    currentStudents = [...cls.students];
+    attendance  = {...(e.attendance||{})};
+    homework    = {...(e.homework||{})};
+    classRating = {...(e.classRating||{})};
+    document.getElementById('selectedClassInfo').style.display = 'block';
+    document.getElementById('selectedClassInfo').textContent = `班級：${cls.name}　學生：${cls.students.join('、')}`;
+    document.getElementById('journalForm').style.display = 'block';
+    renderAttendance(); renderHomework(); renderRatingGrid(); renderScoreTable();
+    setScores(e.scores||{}, e.maxScore);
+  }
+  document.getElementById('fDate').value     = e.date||'';
+  document.getElementById('fWeekday').value  = e.weekday||'';
+  document.getElementById('fProgress').value = e.todayProgress||'';
+  document.getElementById('fHomework').value = e.todayHomework||'';
+  document.getElementById('fNextExam').value = e.nextExam||'';
+  document.getElementById('fNotes').value    = e.notes||'';
+  document.querySelectorAll('#appPage .tab')[0].click();
+  window.scrollTo(0,0);
+};
+window.delEntry = async function(i) {
+  if (!confirm('確定刪除此日誌？')) return;
   showLoading('刪除中...');
-  try{await deleteDoc(doc(db,'entries',entries[i]._id));showToast('🗑 已刪除');await loadEntries();renderHistory();}catch(e){showToast('❌ 刪除失敗','error');}
+  try { await deleteDoc(doc(db,'entries',entries[i]._id)); showToast('🗑 已刪除'); await loadEntries(); renderHistory(); }
+  catch(e) { showToast('❌ 刪除失敗','error'); }
   hideLoading();
 };
 
-// ══ REPORT ══
-function renderReportClassList(){
-  const el=document.getElementById('reportClassList');
-  if(!myClasses.length){el.innerHTML='<div style="color:var(--muted);font-size:13px;">請先在「班級管理」新增班級</div>';return;}
-  el.innerHTML=myClasses.map(c=>`
+// ── REPORT ──
+window.switchReportMode = function(mode) {
+  const isClass = mode==='class';
+  document.getElementById('reportModeClass').style.display   = isClass ? 'block':'none';
+  document.getElementById('reportModeStudent').style.display = isClass ? 'none':'block';
+  document.getElementById('modeClassBtn').style.cssText   = isClass ? 'flex:1;padding:9px;border:none;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;' : 'flex:1;padding:9px;border:none;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:none;color:var(--muted);';
+  document.getElementById('modeStudentBtn').style.cssText = !isClass? 'flex:1;padding:9px;border:none;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;' : 'flex:1;padding:9px;border:none;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:none;color:var(--muted);';
+  if (!isClass) renderStudentQuickPick();
+};
+
+function renderReportClassList() {
+  const el = document.getElementById('reportClassList');
+  if (!myClasses.length) { el.innerHTML='<div style="color:var(--muted);font-size:13px">請先在「班級管理」新增班級</div>'; return; }
+  el.innerHTML = myClasses.map(c => `
     <label class="class-check" id="cc_${c._id}" onclick="toggleClassCheck('${c._id}')">
       <input type="checkbox" value="${c._id}" onchange="toggleClassCheck('${c._id}')">
       <span class="class-check-label">${c.name}</span>
     </label>`).join('');
 }
-
-window.toggleClassCheck=function(id){
-  const el=document.getElementById('cc_'+id);
-  const cb=el.querySelector('input');
-  cb.checked=!cb.checked;
-  el.classList.toggle('checked',cb.checked);
+window.toggleClassCheck = function(id) {
+  const el = document.getElementById('cc_'+id);
+  const cb = el.querySelector('input');
+  cb.checked = !cb.checked;
+  el.classList.toggle('checked', cb.checked);
 };
 
+function renderStudentQuickPick() {
+  const allNames = [...new Set(entries.flatMap(e => e.students||[]))].sort();
+  const el = document.getElementById('studentQuickPick');
+  if (!allNames.length) { el.innerHTML='<span style="color:var(--muted);font-size:13px">尚無學生資料</span>'; return; }
+  el.innerHTML = allNames.map(n => `
+    <button onclick="selectStudent('${n}')" style="background:var(--surface3);border:1px solid var(--border);border-radius:20px;padding:5px 14px;color:var(--text);font-family:inherit;font-size:13px;cursor:pointer;"
+      onmouseover="this.style.borderColor='var(--teal)';this.style.color='var(--teal)'"
+      onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text)'">${n}</button>`).join('');
+}
+window.selectStudent = function(name) { document.getElementById('studentSearchInput').value=name; generateStudentReport(); };
+window.onStudentInputChange = function() {
+  const q = document.getElementById('studentSearchInput').value.trim();
+  document.querySelectorAll('#studentQuickPick button').forEach(b => { b.style.display=(!q||b.textContent.includes(q))?'':'none'; });
+};
+
+function parseMMDD(str) {
+  if (!str) return null;
+  const p = str.replace(/\//g,'-').split('-');
+  return p.length<3 ? null : `${p[1].padStart(2,'0')}/${p[2].padStart(2,'0')}`;
+}
+function entryDateToMMDD(d) {
+  if (!d) return null;
+  if (d.includes('/')) { const p=d.split('/'); return `${p[0].padStart(2,'0')}/${p[1].padStart(2,'0')}`; }
+  const s=d.padStart(4,'0'); return `${s.slice(0,2)}/${s.slice(2,4)}`;
+}
+
 window.generateReport = function() {
-  const startStr=document.getElementById('reportStart').value;
-  const endStr=document.getElementById('reportEnd').value;
-  if(!startStr||!endStr){showToast('請選擇日期範圍','error');return;}
-  const selectedClasses=[...document.querySelectorAll('#reportClassList input:checked')].map(cb=>cb.value);
-  if(!selectedClasses.length){showToast('請至少選擇一個班級','error');return;}
-  const showAtt=document.getElementById('rptAttendance').checked;
-  const showHw=document.getElementById('rptHomework').checked;
-  const showSc=document.getElementById('rptScores').checked;
+  const startStr = document.getElementById('reportStart').value;
+  const endStr   = document.getElementById('reportEnd').value;
+  if (!startStr||!endStr) { showToast('請選擇日期範圍','error'); return; }
+  const selectedClasses = [...document.querySelectorAll('#reportClassList input:checked')].map(cb=>cb.value);
+  if (!selectedClasses.length) { showToast('請至少選擇一個班級','error'); return; }
+  const showAtt = document.getElementById('rptAttendance').checked;
+  const showHw  = document.getElementById('rptHomework').checked;
+  const showSc  = document.getElementById('rptScores').checked;
 
-  // Parse date input (handles YYYY-MM-DD or YYYY/MM/DD)
-  const parseInputDate = (s) => {
-    const clean = s.replace(/\//g, '-');
-    const parts = clean.split('-');
-    if(parts.length < 3) return null;
-    return { month: parts[1].padStart(2,'0'), day: parts[2].padStart(2,'0') };
-  };
-  const sd = parseInputDate(startStr);
-  const ed = parseInputDate(endStr);
-  if(!sd||!ed){showToast('日期格式錯誤','error');return;}
-  const startMMDD = `${sd.month}/${sd.day}`;
-  const endMMDD = `${ed.month}/${ed.day}`;
+  const startMMDD = parseMMDD(startStr);
+  const endMMDD   = parseMMDD(endStr);
 
-  // All entries for selected classes (ignore date filter first to debug)
-  const classEntries = entries.filter(e=>selectedClasses.includes(e.classId));
-
-  // Filter by date - handle both MMDD and MM/DD entry date formats
-  const filtered = classEntries.filter(e=>{
-    if(!e.date) return false;
-    let entryMMDD;
-    if(e.date.includes('/')){
-      // MM/DD format
-      const parts = e.date.split('/');
-      entryMMDD = `${parts[0].padStart(2,'0')}/${parts[1].padStart(2,'0')}`;
-    } else {
-      // MMDD format (e.g. "0517")
-      const s = e.date.padStart(4,'0');
-      entryMMDD = `${s.slice(0,2)}/${s.slice(2,4)}`;
-    }
-    return entryMMDD >= startMMDD && entryMMDD <= endMMDD;
+  const filtered = entries.filter(e => {
+    if (!selectedClasses.includes(e.classId)) return false;
+    const d = entryDateToMMDD(e.date);
+    return d && d>=startMMDD && d<=endMMDD;
   });
 
-  // Show debug info in output area
-  const debugInfo = `
-    <div style="background:rgba(255,255,255,.05);border-radius:10px;padding:12px;margin-bottom:16px;font-size:12px;color:var(--muted);">
-      🔍 除錯資訊：日期範圍 ${startMMDD} ～ ${endMMDD}　
-      班級資料筆數：${classEntries.length}　
-      符合日期：${filtered.length}　
-      日誌日期：${classEntries.map(e=>e.date).join('、')||'（無）'}
-    </div>`;
-
-  if(!filtered.length){
-    document.getElementById('reportOutput').innerHTML = debugInfo + '<div style="color:var(--muted);padding:20px;text-align:center;">此範圍內無資料</div>';
-    document.getElementById('reportOutput').classList.add('show');
-    return;
+  const outEl = document.getElementById('reportOutput');
+  if (!filtered.length) {
+    outEl.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center;">此範圍內無資料（${startMMDD}～${endMMDD}）</div>`;
+    outEl.classList.add('show'); return;
   }
 
-  // Build report per class
-  const byClass={};
-  filtered.forEach(e=>{
-    if(!byClass[e.classId]) byClass[e.classId]={name:e.className,entries:[]};
+  const byClass = {};
+  filtered.forEach(e => {
+    if (!byClass[e.classId]) byClass[e.classId]={name:e.className,entries:[]};
     byClass[e.classId].entries.push(e);
   });
 
   let html='';
-  const printPages=[];
+  Object.values(byClass).forEach(cls => {
+    const es = cls.entries.sort((a,b)=>a.date.localeCompare(b.date));
+    const dates = es.map(e=>e.date);
+    const allStudents = [...new Set(es.flatMap(e=>e.students||[]))];
 
-  Object.values(byClass).forEach(cls=>{
-    const es=cls.entries.sort((a,b)=>a.date.localeCompare(b.date));
-    const dates=es.map(e=>e.date);
-    const allStudents=[...new Set(es.flatMap(e=>e.students||[]))];
+    html += `<div style="margin-bottom:24px"><div style="font-size:18px;font-weight:900;color:var(--purple);margin-bottom:14px">🏫 ${cls.name}</div>`;
 
-    html+=`<div style="margin-bottom:24px;">
-      <div style="font-size:18px;font-weight:900;color:var(--purple);margin-bottom:16px;">🏫 ${cls.name}</div>`;
-
-    let printPage=`<div class="print-page"><h2 style="margin-bottom:8px">百宏文教機構 · ${cls.name}</h2>
-      <div style="font-size:12px;margin-bottom:12px">日期範圍：${startStr} 至 ${endStr}　產生時間：${new Date().toLocaleString('zh-TW')}</div>`;
-
-    // Attendance table
-    if(showAtt){
-      // Dark-mode friendly colors
-      const attBg={present:'rgba(86,204,178,.25)',late:'rgba(255,159,67,.25)',sick:'rgba(86,130,204,.25)',leave:'rgba(192,132,252,.25)',absent:'rgba(255,107,107,.25)'};
-      const attText={present:'#56ccb2',late:'#ff9f43',sick:'#7cb3f0',leave:'#c084fc',absent:'#ff6b6b'};
-      // Normalize attendance value - handle both string ('present') and legacy boolean (true/false)
-
-      let t=`<div style="margin-bottom:20px;">
-        <div style="font-size:14px;font-weight:700;color:var(--teal);margin-bottom:10px;">👥 出勤記錄
-          <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">
-            🟢出勤 🟠遲到 🔵病假 🟣事假 🔴曠課
-          </span>
-        </div>
-        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead><tr style="background:rgba(255,255,255,.06)">
-          <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
-          ${dates.map(d=>`<th style="padding:8px 6px;border:1px solid var(--border);min-width:52px;text-align:center">${d}</th>`).join('')}
-          <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">出勤</th>
-          <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">缺課</th>
-        </tr></thead><tbody>`;
-      allStudents.forEach(s=>{
-        const stList=es.map(e=>normAtt(e.attendance?.[s]));
-        const presentCount=stList.filter(st=>st==='present').length;
-        const absentCount=stList.filter(st=>st!=='present').length;
-        t+=`<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
-          ${stList.map((st,i)=>{
-            const sym={present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'❌'}[st]||'❓';
-            return `<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${attBg[st]||''};font-size:14px" title="${ATT_LABELS[st]||st}">${sym}</td>`;
-          }).join('')}
-          <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:#56ccb2">${presentCount}</td>
-          <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${absentCount>0?'#ff6b6b':'var(--muted)'}">${absentCount}</td>
-        </tr>`;
-      });
-      t+=`</tbody></table></div></div>`;
-      html+=t;
-      printPage+=t;
+    if (showAtt) {
+      html += buildAttTable(es, dates, allStudents);
     }
-
-    // Homework table
-    if(showHw){
-      let t=`<div style="margin-bottom:20px;">
-        <div style="font-size:14px;font-weight:700;color:var(--teal);margin-bottom:10px;">📝 作業繳交記錄</div>
-        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead><tr style="background:rgba(255,255,255,.06)">
-          <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
-          ${dates.map(d=>`<th style="padding:8px 6px;border:1px solid var(--border);min-width:52px;text-align:center">${d}</th>`).join('')}
-          <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">已繳</th>
-          <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">未繳</th>
-        </tr></thead><tbody>`;
-      allStudents.forEach(s=>{
-        const done=es.filter(e=>e.homework[s]!==false).length;
-        const miss=es.length-done;
-        t+=`<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
-          ${es.map(e=>{const ok=e.homework[s]!==false;return `<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${ok?'rgba(86,204,178,.2)':'rgba(255,107,107,.2)'};font-size:14px">${ok?'✅':'⚠️'}</td>`;}).join('')}
-          <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:#56ccb2">${done}</td>
-          <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${miss>0?'#ff6b6b':'var(--muted)'}">${miss}</td>
-        </tr>`;
-      });
-      t+=`</tbody></table></div></div>`;
-      html+=t; printPage+=t;
+    if (showHw) {
+      html += buildHwTable(es, dates, allStudents);
     }
-
-    // Scores table
-    if(showSc){
-      const scoreEntries=es.filter(e=>allStudents.some(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null));
-      if(scoreEntries.length){
-        let t=`<div style="margin-bottom:20px;">
-          <div style="font-size:14px;font-weight:700;color:var(--teal);margin-bottom:10px;">🏆 考試成績</div>
-          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;">
-          <thead><tr style="background:rgba(255,255,255,.06)">
-            <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
-            ${scoreEntries.map(e=>`<th style="padding:8px 6px;border:1px solid var(--border);min-width:70px;text-align:center">${e.date}<br><span style="font-size:10px;color:var(--muted)">滿分${e.maxScore||100}</span></th>`).join('')}
-            <th style="padding:8px 10px;border:1px solid var(--border);text-align:center">平均%</th>
-          </tr></thead><tbody>`;
-        allStudents.forEach(s=>{
-          const pcts=scoreEntries.filter(e=>e.scores?.[s]!==''&&e.scores?.[s]!=null).map(e=>Math.round(e.scores[s]/(e.maxScore||100)*100));
-          const avg=pcts.length?Math.round(pcts.reduce((a,b)=>a+b,0)/pcts.length):null;
-          const avgColor=avg===null?'var(--muted)':avg>=90?'#56ccb2':avg>=60?'#ffd166':'#ff6b6b';
-          t+=`<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
-            ${scoreEntries.map(e=>{
-              const v=e.scores?.[s];
-              const has=v!==''&&v!=null;
-              const pct=has?Math.round(v/(e.maxScore||100)*100):null;
-              const bg=!has?'':pct>=90?'rgba(86,204,178,.25)':pct>=60?'rgba(255,209,102,.2)':'rgba(255,107,107,.25)';
-              const tc=!has?'var(--muted)':pct>=90?'#56ccb2':pct>=60?'#ffd166':'#ff6b6b';
-              return `<td style="padding:8px 6px;border:1px solid var(--border);text-align:center;background:${bg};color:${tc};font-weight:700">${has?`${v}<br><span style="font-size:10px;opacity:.8">${pct}%</span>`:'—'}</td>`;
-            }).join('')}
-            <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:900;font-size:15px;color:${avgColor}">${avg!==null?avg+'%':'—'}</td>
-          </tr>`;
-        });
-        t+=`</tbody></table></div></div>`;
-        html+=t; printPage+=t;
-      }
+    if (showSc) {
+      const scoreEntries = es.filter(e=>allStudents.some(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null));
+      if (scoreEntries.length) html += buildScoreTable(scoreEntries, allStudents);
     }
-
-    printPage+=`</div>`;
-    printPages.push(printPage);
-    html+=`</div><hr style="border-color:var(--border);margin:20px 0">`;
+    html += `</div><hr style="border-color:var(--border);margin:20px 0">`;
   });
 
-  document.getElementById('reportOutput').innerHTML=html;
-  document.getElementById('reportOutput').classList.add('show');
-  document.getElementById('printArea').innerHTML=printPages.join('');
+  document.getElementById('printArea').innerHTML = `<div style="font-family:'Noto Sans TC',sans-serif;padding:20px;color:#000;background:#fff;">${html}</div>`;
+  outEl.innerHTML = html;
+  outEl.classList.add('show');
   showToast('✅ 報表已產生');
 };
 
-window.printReport=function(outputId='reportOutput'){
-  const el=document.getElementById(outputId);
-  if(!el||!el.classList.contains('show')){showToast('請先產生報表','error');return;}
-  document.getElementById('printArea').style.display='block';
-  window.print();
-  setTimeout(()=>document.getElementById('printArea').style.display='none',1000);
-};
-
-// ══ REPORT MODE SWITCH ══
-window.switchReportMode = function(mode) {
-  const isClass = mode==='class';
-  document.getElementById('reportModeClass').style.display = isClass?'block':'none';
-  document.getElementById('reportModeStudent').style.display = isClass?'none':'block';
-  document.getElementById('modeClassBtn').style.cssText = isClass
-    ? 'flex:1;padding:9px;border:none;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;transition:all .2s;'
-    : 'flex:1;padding:9px;border:none;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:none;color:var(--muted);transition:all .2s;';
-  document.getElementById('modeStudentBtn').style.cssText = !isClass
-    ? 'flex:1;padding:9px;border:none;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;transition:all .2s;'
-    : 'flex:1;padding:9px;border:none;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;background:none;color:var(--muted);transition:all .2s;';
-  if(!isClass) renderStudentQuickPick();
-};
-
-function renderStudentQuickPick() {
-  // Collect all unique student names across all entries (this teacher's classes only)
-  const allNames = [...new Set(entries.flatMap(e=>e.students||[]))].sort();
-  const el = document.getElementById('studentQuickPick');
-  if(!allNames.length){
-    el.innerHTML='<span style="color:var(--muted);font-size:13px">尚無學生資料（請先填寫日誌）</span>';
-    return;
-  }
-  el.innerHTML = allNames.map(n=>`
-    <button onclick="selectStudent('${n}')" style="background:var(--surface3);border:1px solid var(--border);border-radius:20px;padding:5px 14px;color:var(--text);font-family:inherit;font-size:13px;cursor:pointer;transition:all .15s;"
-      onmouseover="this.style.borderColor='var(--teal)';this.style.color='var(--teal)'"
-      onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text)'">${n}</button>`).join('');
+function buildAttTable(es, dates, students) {
+  const attBg={present:'rgba(86,204,178,.25)',late:'rgba(255,159,67,.25)',sick:'rgba(86,130,204,.25)',leave:'rgba(192,132,252,.25)',absent:'rgba(255,107,107,.25)'};
+  let t=`<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:var(--teal);margin-bottom:10px">👥 出勤記錄</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:rgba(255,255,255,.06)">
+      <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
+      ${dates.map(d=>`<th style="padding:8px 6px;border:1px solid var(--border);min-width:52px;text-align:center">${d}</th>`).join('')}
+      <th style="padding:8px;border:1px solid var(--border);text-align:center">出勤</th>
+      <th style="padding:8px;border:1px solid var(--border);text-align:center">缺課</th>
+    </tr></thead><tbody>`;
+  students.forEach(s => {
+    const stList = es.map(e=>normAtt(e.attendance?.[s]));
+    const pCount = stList.filter(st=>st==='present').length;
+    t += `<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
+      ${stList.map(st=>`<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${attBg[st]};font-size:14px">${ATT_EMOJI[st]}</td>`).join('')}
+      <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:#56ccb2">${pCount}</td>
+      <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${(es.length-pCount)>0?'#ff6b6b':'var(--muted)'}">${es.length-pCount}</td>
+    </tr>`;
+  });
+  return t+`</tbody></table></div></div>`;
 }
 
-window.selectStudent = function(name) {
-  document.getElementById('studentSearchInput').value = name;
-  generateStudentReport();
-};
-
-window.onStudentInputChange = function() {
-  // Live filter quick pick chips
-  const q = document.getElementById('studentSearchInput').value.trim();
-  const chips = document.querySelectorAll('#studentQuickPick button');
-  chips.forEach(c => {
-    c.style.display = (!q || c.textContent.includes(q)) ? '' : 'none';
+function buildHwTable(es, dates, students) {
+  let t=`<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:var(--teal);margin-bottom:10px">📝 作業繳交</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:rgba(255,255,255,.06)">
+      <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
+      ${dates.map(d=>`<th style="padding:8px 6px;border:1px solid var(--border);min-width:52px;text-align:center">${d}</th>`).join('')}
+      <th style="padding:8px;border:1px solid var(--border);text-align:center">已繳</th>
+      <th style="padding:8px;border:1px solid var(--border);text-align:center">未繳</th>
+    </tr></thead><tbody>`;
+  students.forEach(s => {
+    const done = es.filter(e=>e.homework?.[s]!==false).length;
+    t += `<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
+      ${es.map(e=>{const ok=e.homework?.[s]!==false;return `<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${ok?'rgba(86,204,178,.2)':'rgba(255,107,107,.2)'};font-size:14px">${ok?'✅':'⚠️'}</td>`;}).join('')}
+      <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:#56ccb2">${done}</td>
+      <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${(es.length-done)>0?'#ff6b6b':'var(--muted)'}">${es.length-done}</td>
+    </tr>`;
   });
-};
+  return t+`</tbody></table></div></div>`;
+}
+
+function buildScoreTable(scoreEntries, students) {
+  let t=`<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:var(--teal);margin-bottom:10px">🏆 考試成績</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:rgba(255,255,255,.06)">
+      <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
+      ${scoreEntries.map(e=>`<th style="padding:8px 6px;border:1px solid var(--border);min-width:70px;text-align:center">${e.date}<br><span style="font-size:10px;color:var(--muted)">滿分${e.maxScore||100}</span></th>`).join('')}
+      <th style="padding:8px;border:1px solid var(--border);text-align:center">平均%</th>
+    </tr></thead><tbody>`;
+  students.forEach(s => {
+    const pcts = scoreEntries.filter(e=>e.scores?.[s]!==''&&e.scores?.[s]!=null).map(e=>Math.round(e.scores[s]/(e.maxScore||100)*100));
+    const avg  = pcts.length ? Math.round(pcts.reduce((a,b)=>a+b,0)/pcts.length) : null;
+    const avgColor = avg===null?'var(--muted)':avg>=90?'#56ccb2':avg>=60?'#ffd166':'#ff6b6b';
+    t += `<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
+      ${scoreEntries.map(e=>{const v=e.scores?.[s];const has=v!==''&&v!=null;const pct=has?Math.round(v/(e.maxScore||100)*100):null;const bg=!has?'':pct>=90?'rgba(86,204,178,.25)':pct>=60?'rgba(255,209,102,.2)':'rgba(255,107,107,.25)';const tc=!has?'var(--muted)':pct>=90?'#56ccb2':pct>=60?'#ffd166':'#ff6b6b';return `<td style="padding:8px 6px;border:1px solid var(--border);text-align:center;background:${bg};color:${tc};font-weight:700">${has?`${v}<br><span style="font-size:10px">${pct}%</span>`:'—'}</td>`;}).join('')}
+      <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:900;font-size:15px;color:${avgColor}">${avg!==null?avg+'%':'—'}</td>
+    </tr>`;
+  });
+  return t+`</tbody></table></div></div>`;
+}
 
 window.generateStudentReport = function() {
   const name = document.getElementById('studentSearchInput').value.trim();
-  if(!name){showToast('請輸入學生姓名','error');return;}
+  if (!name) { showToast('請輸入學生姓名','error'); return; }
+  const startMMDD = parseMMDD(document.getElementById('studentReportStart').value);
+  const endMMDD   = parseMMDD(document.getElementById('studentReportEnd').value);
 
-  const startStr = document.getElementById('studentReportStart').value;
-  const endStr = document.getElementById('studentReportEnd').value;
-
-  // Parse date range if provided
-  const parseInputDate = (s) => {
-    if(!s) return null;
-    const clean=s.replace(/\//g,'-'); const parts=clean.split('-');
-    if(parts.length<3) return null;
-    return `${parts[1].padStart(2,'0')}/${parts[2].padStart(2,'0')}`;
-  };
-  const startMMDD = parseInputDate(startStr);
-  const endMMDD = parseInputDate(endStr);
-
-  // Find all entries where this student appears
-  const studentEntries = entries.filter(e=>{
-    if(!(e.students||[]).includes(name)) return false;
-    if(startMMDD && endMMDD){
-      if(!e.date) return false;
-      let eMMDD;
-      if(e.date.includes('/')){const p=e.date.split('/');eMMDD=`${p[0].padStart(2,'0')}/${p[1].padStart(2,'0')}`;}
-      else{const s=e.date.padStart(4,'0');eMMDD=`${s.slice(0,2)}/${s.slice(2,4)}`;}
-      return eMMDD>=startMMDD && eMMDD<=endMMDD;
-    }
+  const studentEntries = entries.filter(e => {
+    if (!(e.students||[]).includes(name)) return false;
+    if (startMMDD && endMMDD) { const d=entryDateToMMDD(e.date); return d&&d>=startMMDD&&d<=endMMDD; }
     return true;
   }).sort((a,b)=>a.date.localeCompare(b.date));
 
-  const outputEl = document.getElementById('studentReportOutput');
+  const outEl = document.getElementById('studentReportOutput');
+  if (!studentEntries.length) { outEl.innerHTML=`<div style="color:var(--muted);padding:20px;text-align:center">找不到「${name}」的任何記錄</div>`; outEl.classList.add('show'); return; }
 
-  if(!studentEntries.length){
-    outputEl.innerHTML=`<div style="color:var(--muted);padding:20px;text-align:center;">找不到「${name}」的任何記錄</div>`;
-    outputEl.classList.add('show');
-    return;
-  }
-
-  // Group by class
   const byClass={};
-  studentEntries.forEach(e=>{
-    const k=e.className||e.classId||'未知班級';
-    if(!byClass[k]) byClass[k]=[];
-    byClass[k].push(e);
-  });
+  studentEntries.forEach(e=>{const k=e.className||'未知';if(!byClass[k])byClass[k]=[];byClass[k].push(e);});
+  const totalPresent = studentEntries.filter(e=>normAtt(e.attendance?.[name])==='present').length;
+  const totalAbsent  = studentEntries.length-totalPresent;
+  const totalHwDone  = studentEntries.filter(e=>e.homework?.[name]!==false).length;
+  const scoreList    = studentEntries.filter(e=>e.scores?.[name]!==''&&e.scores?.[name]!=null);
+  const avgPct       = scoreList.length ? Math.round(scoreList.reduce((a,e)=>a+e.scores[name]/(e.maxScore||100)*100,0)/scoreList.length) : null;
+  const avgColor     = avgPct===null?'var(--muted)':avgPct>=90?'var(--teal)':avgPct>=60?'var(--yellow)':'var(--red)';
+  const ratingList   = studentEntries.filter(e=>(e.classRating||{})[name]>0);
+  const avgRating    = ratingList.length ? (ratingList.reduce((a,e)=>a+(e.classRating[name]||0),0)/ratingList.length).toFixed(1) : null;
 
-    const attEmoji={present:'✅',late:'🕐',sick:'🤒',leave:'📋',absent:'❌'};
-  const attBg={present:'rgba(86,204,178,.2)',late:'rgba(255,159,67,.2)',sick:'rgba(86,130,204,.2)',leave:'rgba(192,132,252,.2)',absent:'rgba(255,107,107,.2)'};
-
-  let html=`
-    <div style="background:rgba(192,132,252,.08);border:1px solid rgba(192,132,252,.2);border-radius:14px;padding:16px;margin-bottom:20px;">
-      <div style="font-size:20px;font-weight:900;color:var(--purple);margin-bottom:4px;">👤 ${name}</div>
-      <div style="font-size:13px;color:var(--muted)">
-        共 ${studentEntries.length} 筆記錄　跨 ${Object.keys(byClass).length} 個班級
-        ${startMMDD&&endMMDD?`　日期：${startMMDD} ～ ${endMMDD}`:'（全部時間）'}
-      </div>
-    </div>`;
-
-  // Summary row across classes
-  html+=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px;">`;
-  const totalPresent=studentEntries.filter(e=>normAtt(e.attendance?.[name])==='present').length;
-  const totalAbsent=studentEntries.filter(e=>normAtt(e.attendance?.[name])!=='present').length;
-  const totalHwDone=studentEntries.filter(e=>e.homework?.[name]!==false).length;
-  const totalHwMiss=studentEntries.length-totalHwDone;
-  const scoreList=studentEntries.filter(e=>e.scores?.[name]!==''&&e.scores?.[name]!=null);
-  const avgPct=scoreList.length?Math.round(scoreList.reduce((a,e)=>a+e.scores[name]/(e.maxScore||100)*100,0)/scoreList.length):null;
-  html+=`
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center;">
-      <div style="font-size:24px;font-weight:900;color:var(--teal)">${totalPresent}</div>
-      <div style="font-size:12px;color:var(--muted)">出勤次數</div>
+  let html=`<div style="background:rgba(192,132,252,.08);border:1px solid rgba(192,132,252,.25);border-radius:14px;padding:18px;margin-bottom:18px">
+    <div style="font-size:22px;font-weight:900;color:var(--purple);margin-bottom:6px">👤 ${name}</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:16px">共 ${studentEntries.length} 筆記錄　跨 ${Object.keys(byClass).length} 個班級${startMMDD&&endMMDD?`　${startMMDD}～${endMMDD}`:'（全部時間）'}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px">
+      <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center"><div style="font-size:26px;font-weight:900;color:var(--teal)">${totalPresent}</div><div style="font-size:12px;color:var(--muted)">出勤次數</div></div>
+      <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center"><div style="font-size:26px;font-weight:900;color:${totalAbsent>0?'var(--red)':'var(--muted)'}">${totalAbsent}</div><div style="font-size:12px;color:var(--muted)">缺課次數</div></div>
+      <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center"><div style="font-size:26px;font-weight:900;color:${totalHwDone<studentEntries.length?'var(--yellow)':'var(--teal)'}">${totalHwDone}/${studentEntries.length}</div><div style="font-size:12px;color:var(--muted)">作業繳交</div></div>
+      <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center"><div style="font-size:26px;font-weight:900;color:${avgColor}">${avgPct!==null?avgPct+'%':'—'}</div><div style="font-size:12px;color:var(--muted)">平均成績%</div></div>
+      ${avgRating?`<div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center"><div style="font-size:26px;font-weight:900;color:var(--yellow)">⭐${avgRating}</div><div style="font-size:12px;color:var(--muted)">平均上課評分</div></div>`:''}
     </div>
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center;">
-      <div style="font-size:24px;font-weight:900;color:${totalAbsent>0?'var(--red)':'var(--muted)'}">${totalAbsent}</div>
-      <div style="font-size:12px;color:var(--muted)">缺課次數</div>
-    </div>
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center;">
-      <div style="font-size:24px;font-weight:900;color:${totalHwMiss>0?'var(--yellow)':'var(--teal)'}">${totalHwDone}/${studentEntries.length}</div>
-      <div style="font-size:12px;color:var(--muted)">作業繳交</div>
-    </div>
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center;">
-      <div style="font-size:24px;font-weight:900;color:${avgPct===null?'var(--muted)':avgPct>=90?'var(--teal)':avgPct>=60?'var(--yellow)':'var(--red)'}">${avgPct!==null?avgPct+'%':'—'}</div>
-      <div style="font-size:12px;color:var(--muted)">平均成績%</div>
-    </div>`;
-  html+=`</div>`;
+  </div>`;
 
-  // Per-class detail
   Object.entries(byClass).forEach(([cls,es])=>{
-    html+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:14px;">
-      <div style="font-size:15px;font-weight:900;color:var(--purple);margin-bottom:14px;">🏫 ${cls}</div>
-      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;">
-      <thead><tr style="background:rgba(255,255,255,.05)">
-        <th style="padding:8px;text-align:left;border:1px solid var(--border)">日期</th>
-        <th style="padding:8px;border:1px solid var(--border);text-align:center">出勤</th>
-        <th style="padding:8px;border:1px solid var(--border);text-align:center">作業</th>
-        <th style="padding:8px;border:1px solid var(--border);text-align:center">成績</th>
-        <th style="padding:8px;border:1px solid var(--border);text-align:left">進度</th>
-        <th style="padding:8px;border:1px solid var(--border);text-align:left">作業內容</th>
-      </tr></thead><tbody>`;
+    html+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:14px">
+      <div style="font-size:15px;font-weight:900;color:var(--purple);margin-bottom:12px">🏫 ${cls}</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:rgba(255,255,255,.05)">
+          <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">日期</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:center">出勤</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:center">作業</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:center">成績</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:center">上課評分</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:left">進度</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:left">作業</th>
+        </tr></thead><tbody>`;
     es.forEach(e=>{
-      const st=normAtt(e.attendance?.[name]);
-      const hwOk=e.homework?.[name]!==false;
-      const score=e.scores?.[name];
-      const hasScore=score!==''&&score!=null;
-      const max=e.maxScore||100;
-      const pct=hasScore?Math.round(score/max*100):null;
-      const scoreColor=pct===null?'var(--muted)':pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
+      const st     = normAtt(e.attendance?.[name]);
+      const hwOk   = e.homework?.[name]!==false;
+      const score  = e.scores?.[name];
+      const hasSc  = score!==''&&score!=null;
+      const max    = e.maxScore||100;
+      const pct    = hasSc?Math.round(score/max*100):null;
+      const scColor= pct===null?'var(--muted)':pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
+      const rating = (e.classRating||{})[name]||0;
+      const rColor = rating?RATING_COLORS[rating]:'var(--muted)';
       html+=`<tr>
-        <td style="padding:8px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${attBg[st]}">${attEmoji[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
+        <td style="padding:8px 10px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${ATT_BG[st]}">${ATT_EMOJI[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scoreColor}">${hasScore?`${score}/${max}<br><span style="font-size:11px">${pct}%</span>`:'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scColor}">${hasSc?`${score}/${max} (${pct}%)`:'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${rColor}">${rating?`${'⭐'.repeat(rating)} ${rating}分`:'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayProgress||'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayHomework||'—'}</td>
       </tr>`;
@@ -1305,123 +1212,110 @@ window.generateStudentReport = function() {
     html+=`</tbody></table></div></div>`;
   });
 
-  // Store for print
-  document.getElementById('printArea').innerHTML=`<div class="print-page">
-    <h2>百宏文教機構 · 學生個人報表</h2>
-    <h3 style="margin:8px 0">${name}</h3>
-    <div style="font-size:12px;margin-bottom:16px">產生時間：${new Date().toLocaleString('zh-TW')}</div>
-    ${html}
-  </div>`;
-
-  outputEl.innerHTML=html;
-  outputEl.classList.add('show');
-  showToast(`✅ 已找到 ${name} 的 ${studentEntries.length} 筆記錄`);
+  document.getElementById('printArea').innerHTML=`<div style="font-family:'Noto Sans TC',sans-serif;padding:20px;color:#000;background:#fff"><h2>百宏文教機構 · 學生個人報表</h2><h3>${name}</h3><div style="font-size:12px;margin-bottom:16px">產生時間：${new Date().toLocaleString('zh-TW')}</div>${html}</div>`;
+  outEl.innerHTML=html;
+  outEl.classList.add('show');
+  showToast(`✅ 找到 ${name} 的 ${studentEntries.length} 筆記錄`);
 };
 
+window.printReport = function(outputId='reportOutput') {
+  const el = document.getElementById(outputId);
+  if (!el||!el.classList.contains('show')) { showToast('請先產生報表','error'); return; }
+  document.getElementById('printArea').style.display='block';
+  window.print();
+  setTimeout(()=>document.getElementById('printArea').style.display='none',1000);
+};
 
-// ══ ADMIN FUNCTIONS ══
+// ── ADMIN ──
 window.adminSwitchTab = function(name, el) {
-  ['overview','entries','stats','student','accounts'].forEach(t=>document.getElementById('admin-tab-'+t).style.display='none');
-  document.querySelectorAll('#adminPage .tab').forEach(t=>t.classList.remove('active'));
+  ['overview','entries','stats','student','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
+  document.querySelectorAll('#adminPage .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('admin-tab-'+name).style.display='block';
   el.classList.add('active');
-  if(name==='entries') adminRenderEntries();
-  if(name==='stats') adminRenderStats();
-  if(name==='accounts') renderTeachers();
-  if(name==='student') renderAdminStudentPick();
+  if (name==='entries') adminRenderEntries();
+  if (name==='stats')   adminRenderStats();
+  if (name==='accounts') renderTeachers();
+  if (name==='student') renderAdminStudentPick();
 };
 
 async function adminLoadAll() {
   showLoading('載入資料...');
-  try {
-    const esnap = await getDocs(collection(db,'entries'));
-    allEntries = esnap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
-    const tsnap = await getDocs(collection(db,'teachers'));
-    teachers = tsnap.docs.map(d=>({_id:d.id,...d.data()}));
-    adminRenderOverview();
-    adminPopulateFilters();
-    renderAdminStudentPick();
-  } catch(e) { showToast('❌ 載入失敗：'+e.message,'error'); console.error(e); }
+  try { const s=await getDocs(collection(db,'entries')); allEntries=s.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0)); } catch(e) { console.error(e); allEntries=[]; }
+  try { const s=await getDocs(collection(db,'teachers')); teachers=s.docs.map(d=>({_id:d.id,...d.data()})); } catch(e) { console.error(e); teachers=[]; }
   hideLoading();
+  adminRenderOverview(); adminPopulateFilters(); renderAdminStudentPick();
 }
+window.adminRefresh = function() { adminLoadAll().then(()=>showToast('🔄 已更新')); };
 
-window.adminRefresh = async function() { await adminLoadAll(); showToast('🔄 資料已更新'); };
-
-// ── OVERVIEW ──
 function adminRenderOverview() {
-  const teacherNames = [...new Set(allEntries.map(e=>e.teacherName))];
-  const totalAbsent = allEntries.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
-  const totalHwMiss = allEntries.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
-  document.getElementById('summaryGrid').innerHTML = `
+  const totalAbsent  = allEntries.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
+  const totalHwMiss  = allEntries.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
+  document.getElementById('summaryGrid').innerHTML=`
     <div class="summary-card"><div class="summary-num" style="color:var(--teal)">${allEntries.length}</div><div class="summary-lbl">總日誌數</div></div>
     <div class="summary-card"><div class="summary-num" style="color:var(--purple)">${teachers.length}</div><div class="summary-lbl">老師人數</div></div>
     <div class="summary-card"><div class="summary-num" style="color:var(--red)">${totalAbsent}</div><div class="summary-lbl">累計缺席次</div></div>
     <div class="summary-card"><div class="summary-num" style="color:var(--yellow)">${totalHwMiss}</div><div class="summary-lbl">累計未繳次</div></div>`;
-  const recent = allEntries.slice(0,8);
-  document.getElementById('recentList').innerHTML = recent.length
-    ? recent.map((e,i) => entryCard(e,'r'+i)).join('')
-    : '<div class="empty"><div class="empty-icon">📭</div><div>尚無日誌</div></div>';
+  document.getElementById('recentList').innerHTML = allEntries.slice(0,8).map((e,i)=>adminEntryCard(e,'r'+i)).join('') || '<div class="empty"><div class="empty-icon">📭</div><div>尚無日誌</div></div>';
 }
 
 function adminPopulateFilters() {
+  const names   = [...new Set(allEntries.map(e=>e.teacherName))].sort();
   const classes = [...new Set(allEntries.map(e=>e.className).filter(Boolean))].sort();
-  document.getElementById('filterClass').innerHTML = '<option value="">所有班級</option>' + classes.map(c=>`<option>${c}</option>`).join('');
-
-  const names = [...new Set(allEntries.map(e=>e.teacherName))].sort();
-  const dates = [...new Set(allEntries.map(e=>e.date))].sort().reverse();
-  document.getElementById('filterTeacher').innerHTML = '<option value="">所有老師</option>' + names.map(t=>`<option>${t}</option>`).join('');
-  document.getElementById('filterDate').innerHTML = '<option value="">所有日期</option>' + dates.map(d=>`<option>${d}</option>`).join('');
+  const dates   = [...new Set(allEntries.map(e=>e.date))].sort().reverse();
+  document.getElementById('filterTeacher').innerHTML = '<option value="">所有老師</option>'+names.map(n=>`<option>${n}</option>`).join('');
+  document.getElementById('filterClass').innerHTML   = '<option value="">所有班級</option>'+classes.map(c=>`<option>${c}</option>`).join('');
+  document.getElementById('filterDate').innerHTML    = '<option value="">所有日期</option>'+dates.map(d=>`<option>${d}</option>`).join('');
 }
 
-// ── ENTRIES ──
 window.adminRenderEntries = function() {
   const teacher = document.getElementById('filterTeacher').value;
-  const date = document.getElementById('filterDate').value;
-  let filtered = allEntries;
-  if (teacher) filtered = filtered.filter(e=>e.teacherName===teacher);
-  if (date) filtered = filtered.filter(e=>e.date===date);
-  document.getElementById('entriesList').innerHTML = filtered.length
-    ? filtered.map((e,i) => entryCard(e,'e'+i)).join('')
-    : '<div class="empty"><div class="empty-icon">🔍</div><div>沒有符合的日誌</div></div>';
+  const cls     = document.getElementById('filterClass').value;
+  const date    = document.getElementById('filterDate').value;
+  let filtered  = allEntries;
+  if (teacher) filtered=filtered.filter(e=>e.teacherName===teacher);
+  if (cls)     filtered=filtered.filter(e=>e.className===cls);
+  if (date)    filtered=filtered.filter(e=>e.date===date);
+  document.getElementById('entriesList').innerHTML = filtered.length ? filtered.map((e,i)=>adminEntryCard(e,'e'+i)).join('') : '<div class="empty"><div class="empty-icon">🔍</div><div>沒有符合的日誌</div></div>';
 };
 
-function entryCard(e, prefix) {
-  const sts = e.students||Object.keys(e.attendance||{});
-  const absent = sts.filter(s=>!e.attendance[s]);
-  const hwMiss = sts.filter(s=>e.homework[s]===false);
-  const hasScores = sts.some(s=>e.scores?.[s]!=='');
+function adminEntryCard(e, prefix) {
+  const sts    = e.students||[];
+  const absent = sts.filter(s=>normAtt(e.attendance?.[s])!=='present');
+  const hwMiss = sts.filter(s=>e.homework?.[s]===false);
+  const hasSc  = sts.some(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null);
+  const max    = e.maxScore||100;
   return `<div class="entry-card">
-    <div class="entry-header" onclick="toggleE('${prefix}')">
-      <div><span class="entry-date">${e.date}</span><span class="entry-teacher">${e.teacherName}</span><span style="color:#c084fc;font-size:12px;margin-left:6px;font-weight:700">${e.className||''}</span><span class="entry-weekday"> · 星期${e.weekday} · ${sts.length}人</span></div>
+    <div class="entry-header" onclick="adminToggle('${prefix}')">
+      <div><span class="entry-date">${e.date}</span><span class="entry-teacher">${e.teacherName||''}</span><span style="font-size:12px;color:var(--purple);margin-left:6px">${e.className||''}</span></div>
       <div class="entry-badges">
-        ${absent.length?`<span class="badge badge-red">缺${absent.length}</span>`:''}
-        ${hwMiss.length?`<span class="badge badge-yellow">未繳${hwMiss.length}</span>`:''}
+        ${absent.length?`<span class="ebadge ebadge-red">缺${absent.length}</span>`:''}
+        ${hwMiss.length?`<span class="ebadge ebadge-yellow">未繳${hwMiss.length}</span>`:''}
         <span class="chevron" id="chev-${prefix}">▼</span>
       </div>
     </div>
     <div class="entry-body" id="body-${prefix}">
-      <div class="detail-row"><div class="detail-label">出缺勤</div><div class="detail-value">${sts.map(s=>`<span class="tag ${e.attendance[s]?'tag-green':'tag-red'}">${s}</span>`).join('')}</div></div>
-      <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted);font-size:13px">全部繳交 ✅</span>'}</div></div>
-      ${hasScores?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!=="").map(s=>{const max=e.maxScore||100;const pct=Math.round(e.scores[s]/max*100);return `<span class="tag tag-green">${s}:${e.scores[s]}/${max}(${pct}%)</span>`;}).join('')}</div></div>`:''}
-      ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value" style="font-size:13px">${e.todayProgress}</div></div>`:''}
-      ${e.todayHomework?`<div class="detail-row"><div class="detail-label">作業</div><div class="detail-value" style="font-size:13px">${e.todayHomework}</div></div>`:''}
-      ${e.nextExam?`<div class="detail-row"><div class="detail-label">考試</div><div class="detail-value" style="font-size:13px;color:var(--red);font-weight:700">${e.nextExam}</div></div>`:''}
-      ${e.notes?`<div class="detail-row"><div class="detail-label">備註</div><div class="detail-value" style="font-size:13px;color:var(--muted)">${e.notes}</div></div>`:''}
+      <div class="detail-row"><div class="detail-label">出勤</div><div class="detail-value">${sts.map(s=>`<span class="tag ${ATT_TAG[normAtt(e.attendance?.[s])]}">${s}：${ATT_LABELS[normAtt(e.attendance?.[s])]}</span>`).join('')}</div></div>
+      <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted)">全部繳交 ✅</span>'}</div></div>
+      ${hasSc?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null).map(s=>{const pct=Math.round(e.scores[s]/max*100);const tc=pct>=90?'tag-green':pct>=60?'tag-yellow':'tag-red';return`<span class="tag ${tc}">${s}:${e.scores[s]}/${max}(${pct}%)</span>`;}).join('')}</div></div>`:''}
+      ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value">${e.todayProgress}</div></div>`:''}
+      ${e.nextExam?`<div class="detail-row"><div class="detail-label">考試</div><div class="detail-value" style="color:var(--red);font-weight:700">${e.nextExam}</div></div>`:''}
     </div>
   </div>`;
 }
-window.toggleE = function(p){document.getElementById('body-'+p).classList.toggle('open');document.getElementById('chev-'+p).classList.toggle('open');};
+window.adminToggle = function(p) {
+  document.getElementById('body-'+p).classList.toggle('open');
+  document.getElementById('chev-'+p).classList.toggle('open');
+};
 
-// ── STATS ──
 function adminRenderStats() {
   const names = [...new Set(allEntries.map(e=>e.teacherName))].sort();
-  if (!names.length){document.getElementById('statsList').innerHTML='<div class="empty"><div class="empty-icon">📈</div><div>尚無資料</div></div>';return;}
+  if (!names.length) { document.getElementById('statsList').innerHTML='<div class="empty"><div class="empty-icon">📈</div><div>尚無資料</div></div>'; return; }
   document.getElementById('statsList').innerHTML = names.map(t=>{
     const te = allEntries.filter(e=>e.teacherName===t);
-    const totalAbsent = te.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>!v).length,0);
+    const totalAbsent = te.reduce((a,e)=>a+Object.values(e.attendance||{}).filter(v=>normAtt(v)!=='present').length,0);
     const totalHwMiss = te.reduce((a,e)=>a+Object.values(e.homework||{}).filter(v=>v===false).length,0);
     return `<div class="teacher-stat">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="font-size:16px;font-weight:900">${t}</span>
         <span style="font-size:12px;color:var(--muted)">最後填寫：${te[0]?.date||'-'}</span>
       </div>
@@ -1434,329 +1328,168 @@ function adminRenderStats() {
   }).join('');
 }
 
-// ── ACCOUNTS ──
-function renderTeachers() {
-  document.getElementById('teacherCount').textContent = teachers.length;
-  if (!teachers.length) {
-    document.getElementById('teacherList').innerHTML = '<div class="empty"><div class="empty-icon">👤</div><div>尚無老師帳號，請新增</div></div>';
-    return;
-  }
-  document.getElementById('teacherList').innerHTML = teachers.map(t => `
-    <div class="teacher-card">
-      <div class="teacher-info">
-        <div class="teacher-name-big">${t.name}</div>
-        <div class="teacher-meta">帳號：${t.userId}　　已填日誌：${allEntries.filter(e=>e.teacherId===t.userId).length} 筆</div>
-      </div>
-      <div class="teacher-actions">
-        <button class="btn btn-sm btn-ghost" onclick="resetPassword('${t._id}','${t.name}')">🔑 重設密碼</button>
-        <button class="btn btn-sm btn-red" onclick="promptDelete('${t._id}','${t.name}')">🗑 刪除</button>
-      </div>
-    </div>`).join('');
-}
-
-window.addTeacher = async function() {
-  const name = document.getElementById('newName').value.trim();
-  const userId = document.getElementById('newUser').value.trim().toLowerCase();
-  const pass = document.getElementById('newPass').value;
-  const pass2 = document.getElementById('newPass2').value;
-  if (!name||!userId||!pass){showToast('請填寫所有欄位','error');return;}
-  if (pass !== pass2){showToast('兩次密碼不一致','error');return;}
-  if (pass.length < 4){showToast('密碼至少4碼','error');return;}
-  if (teachers.find(t=>t.userId===userId)){showToast('此帳號已存在','error');return;}
-  if (userId==='admin'){showToast('不能使用 admin 作為帳號','error');return;}
-  showLoading('新增帳號中...');
-  try {
-    await addDoc(collection(db,'teachers'),{ name, userId, password:pass, createdAt:Date.now() });
-    showToast(`✅ 已新增：${name}`);
-    document.getElementById('newName').value='';
-    document.getElementById('newUser').value='';
-    document.getElementById('newPass').value='';
-    document.getElementById('newPass2').value='';
-    await loadAll();
-    renderTeachers();
-  } catch(e){showToast('❌ 新增失敗：'+e.message,'error');}
-  hideLoading();
-};
-
-window.resetPassword = async function(id, name) {
-  const newPass = prompt(`為「${name}」設定新密碼（至少4碼）：`);
-  if (!newPass) return;
-  if (newPass.length < 4){showToast('密碼至少4碼','error');return;}
-  showLoading('更新密碼中...');
-  try {
-    await updateDoc(doc(db,'teachers',id),{ password:newPass });
-    showToast(`🔑 ${name} 密碼已更新`);
-    const idx = teachers.findIndex(t=>t._id===id);
-    if(idx>=0) teachers[idx].password = newPass;
-  } catch(e){showToast('❌ 更新失敗','error');}
-  hideLoading();
-};
-
-window.promptDelete = function(id, name) {
-  deleteTargetId = id;
-  document.getElementById('deleteModalSub').textContent = `確定要刪除「${name}」的帳號嗎？此操作無法還原，但不會刪除該老師的日誌記錄。`;
-  document.getElementById('deleteModal').classList.add('show');
-};
-window.closeModal = function(){document.getElementById('deleteModal').classList.remove('show');deleteTargetId=null;};
-
-window.confirmDelete = async function() {
-  if (!deleteTargetId) return;
-  closeModal();
-  showLoading('刪除中...');
-  try {
-    await deleteDoc(doc(db,'teachers',deleteTargetId));
-    teachers = teachers.filter(t=>t._id!==deleteTargetId);
-    renderTeachers();
-    showToast('🗑 帳號已刪除');
-  } catch(e){showToast('❌ 刪除失敗','error');}
-  hideLoading();
-  deleteTargetId = null;
-};
-
-// ── STUDENT SEARCH (cross-teacher) ──
-
-
-
-function renderAdminStudentPick(){
-  const allNames=[...new Set(allEntries.flatMap(e=>e.students||[]))].sort();
-  const el=document.getElementById('adminStudentPick');
-  if(!allNames.length){el.innerHTML='<span style="color:var(--muted);font-size:13px">尚無資料</span>';return;}
-  el.innerHTML=allNames.map(n=>`
-    <button onclick="pickAdminStudent('${n}')"
-      style="background:#21262d;border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:5px 14px;color:#e6edf3;font-family:inherit;font-size:13px;cursor:pointer;transition:all .15s;"
+// ── ADMIN STUDENT SEARCH ──
+function renderAdminStudentPick() {
+  const allNames = [...new Set(allEntries.flatMap(e=>e.students||[]))].sort();
+  const el = document.getElementById('adminStudentPick');
+  if (!el) return;
+  el.innerHTML = allNames.map(n=>`
+    <button onclick="pickAdminStudent('${n}')" style="background:var(--surface3);border:1px solid rgba(255,255,255,.1);border-radius:20px;padding:5px 14px;color:var(--text);font-family:inherit;font-size:13px;cursor:pointer"
       onmouseover="this.style.borderColor='#c084fc';this.style.color='#c084fc'"
-      onmouseout="this.style.borderColor='rgba(255,255,255,.1)';this.style.color='#e6edf3'">${n}</button>`).join('');
+      onmouseout="this.style.borderColor='rgba(255,255,255,.1)';this.style.color='var(--text)'">${n}</button>`).join('') || '<span style="color:var(--muted);font-size:13px">尚無資料</span>';
 }
-
-window.pickAdminStudent=function(name){
-  document.getElementById('adminStudentInput').value=name;
-  adminStudentSearch();
+window.pickAdminStudent = function(name) { document.getElementById('adminStudentInput').value=name; adminStudentSearch(); };
+window.adminFilterStudentPick = function() {
+  const q = document.getElementById('adminStudentInput').value.trim();
+  document.querySelectorAll('#adminStudentPick button').forEach(b=>{ b.style.display=(!q||b.textContent.includes(q))?'':'none'; });
 };
 
-window.adminFilterStudentPick=function(){
-  const q=document.getElementById('adminStudentInput').value.trim();
-  document.querySelectorAll('#adminStudentPick button').forEach(b=>{
-    b.style.display=(!q||b.textContent.includes(q))?'':'none';
-  });
-};
+window.adminStudentSearch = function() {
+  const name = document.getElementById('adminStudentInput').value.trim();
+  if (!name) { showToast('請輸入學生姓名','error'); return; }
+  const startMMDD = parseMMDD(document.getElementById('adminStudentStart').value);
+  const endMMDD   = parseMMDD(document.getElementById('adminStudentEnd').value);
 
-window.adminStudentSearch=function(){
-  const name=document.getElementById('adminStudentInput').value.trim();
-  if(!name){showToast('請輸入學生姓名','error');return;}
-
-  const startStr=document.getElementById('adminStudentStart').value;
-  const endStr=document.getElementById('adminStudentEnd').value;
-
-  const parseMMDD=(s)=>{
-    if(!s) return null;
-    const p=s.replace(/\//g,'-').split('-');
-    return p.length<3?null:`${p[1].padStart(2,'0')}/${p[2].padStart(2,'0')}`;
-  };
-  const startMMDD=parseMMDD(startStr);
-  const endMMDD=parseMMDD(endStr);
-
-  const toMMDD=(date)=>{
-    if(!date) return null;
-    if(date.includes('/')){const p=date.split('/');return `${p[0].padStart(2,'0')}/${p[1].padStart(2,'0')}`;}
-    const s=date.padStart(4,'0');return `${s.slice(0,2)}/${s.slice(2,4)}`;
-  };
-
-  // Search across ALL entries from ALL teachers
-  const studentEntries=allEntries.filter(e=>{
-    if(!(e.students||[]).includes(name)) return false;
-    if(startMMDD&&endMMDD){
-      const d=toMMDD(e.date);
-      return d&&d>=startMMDD&&d<=endMMDD;
-    }
+  const studentEntries = allEntries.filter(e=>{
+    if (!(e.students||[]).includes(name)) return false;
+    if (startMMDD&&endMMDD) { const d=entryDateToMMDD(e.date); return d&&d>=startMMDD&&d<=endMMDD; }
     return true;
   }).sort((a,b)=>a.date.localeCompare(b.date));
 
-  const outEl=document.getElementById('adminStudentOutput');
+  const outEl = document.getElementById('adminStudentOutput');
+  if (!studentEntries.length) { outEl.innerHTML=`<div style="color:var(--muted);padding:20px;text-align:center">找不到「${name}」的任何記錄</div>`; return; }
 
-  if(!studentEntries.length){
-    outEl.innerHTML=`<div style="color:var(--muted);padding:20px;text-align:center;">找不到「${name}」的任何記錄</div>`;
-    return;
-  }
-
-  // Group by teacher + class
   const byGroup={};
   studentEntries.forEach(e=>{
-    const key=`${e.teacherName||'未知老師'} · ${e.className||'未知班級'}`;
-    if(!byGroup[key]) byGroup[key]={teacher:e.teacherName,cls:e.className,entries:[]};
-    byGroup[key].entries.push(e);
+    const k=`${e.teacherName||'未知老師'} · ${e.className||'未知班級'}`;
+    if(!byGroup[k]) byGroup[k]={teacher:e.teacherName,cls:e.className,entries:[]};
+    byGroup[k].entries.push(e);
   });
 
-  const totalPresent=studentEntries.filter(e=>normAtt(e.attendance?.[name])==='present').length;
-  const totalAbsent=studentEntries.length-totalPresent;
-  const totalHwDone=studentEntries.filter(e=>e.homework?.[name]!==false).length;
-  const scoreList=studentEntries.filter(e=>e.scores?.[name]!==''&&e.scores?.[name]!=null);
-  const avgPct=scoreList.length?Math.round(scoreList.reduce((a,e)=>a+e.scores[name]/(e.maxScore||100)*100,0)/scoreList.length):null;
-  const avgColor=avgPct===null?'var(--muted)':avgPct>=90?'var(--teal)':avgPct>=60?'var(--yellow)':'var(--red)';
+  const totalPresent = studentEntries.filter(e=>normAtt(e.attendance?.[name])==='present').length;
+  const totalAbsent  = studentEntries.length-totalPresent;
+  const totalHwDone  = studentEntries.filter(e=>e.homework?.[name]!==false).length;
+  const scoreList    = studentEntries.filter(e=>e.scores?.[name]!==''&&e.scores?.[name]!=null);
+  const avgPct       = scoreList.length?Math.round(scoreList.reduce((a,e)=>a+e.scores[name]/(e.maxScore||100)*100,0)/scoreList.length):null;
+  const avgColor     = avgPct===null?'var(--muted)':avgPct>=90?'var(--teal)':avgPct>=60?'var(--yellow)':'var(--red)';
 
-  let html=`
-    <div style="background:rgba(192,132,252,.08);border:1px solid rgba(192,132,252,.25);border-radius:14px;padding:18px;margin-bottom:18px;">
-      <div style="font-size:22px;font-weight:900;color:var(--purple);margin-bottom:6px;">👤 ${name}</div>
-      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">
-        共 ${studentEntries.length} 筆記錄　跨 ${Object.keys(byGroup).length} 個班級
-        ${startMMDD&&endMMDD?`　日期：${startMMDD} ～ ${endMMDD}`:'（全部時間）'}
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
-        <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
-          <div style="font-size:26px;font-weight:900;color:var(--teal)">${totalPresent}</div>
-          <div style="font-size:12px;color:var(--muted)">出勤次數</div>
-        </div>
-        <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
-          <div style="font-size:26px;font-weight:900;color:${totalAbsent>0?'var(--red)':'var(--muted)'}">${totalAbsent}</div>
-          <div style="font-size:12px;color:var(--muted)">缺課次數</div>
-        </div>
-        <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
-          <div style="font-size:26px;font-weight:900;color:${totalHwDone<studentEntries.length?'var(--yellow)':'var(--teal)'}">${totalHwDone}/${studentEntries.length}</div>
-          <div style="font-size:12px;color:var(--muted)">作業繳交</div>
-        </div>
-        <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center;">
-          <div style="font-size:26px;font-weight:900;color:${avgColor}">${avgPct!==null?avgPct+'%':'—'}</div>
-          <div style="font-size:12px;color:var(--muted)">平均成績%</div>
-        </div>
-      </div>
-    </div>`;
+  let html=`<div style="background:rgba(192,132,252,.08);border:1px solid rgba(192,132,252,.25);border-radius:14px;padding:18px;margin-bottom:18px">
+    <div style="font-size:22px;font-weight:900;color:var(--purple);margin-bottom:6px">👤 ${name}</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:16px">共 ${studentEntries.length} 筆　跨 ${Object.keys(byGroup).length} 個班級</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px">
+      <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center"><div style="font-size:26px;font-weight:900;color:var(--teal)">${totalPresent}</div><div style="font-size:12px;color:var(--muted)">出勤次數</div></div>
+      <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center"><div style="font-size:26px;font-weight:900;color:${totalAbsent>0?'var(--red)':'var(--muted)'}">${totalAbsent}</div><div style="font-size:12px;color:var(--muted)">缺課次數</div></div>
+      <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center"><div style="font-size:26px;font-weight:900;color:${totalHwDone<studentEntries.length?'var(--yellow)':'var(--teal)'}">${totalHwDone}/${studentEntries.length}</div><div style="font-size:12px;color:var(--muted)">作業繳交</div></div>
+      <div style="background:rgba(255,255,255,.05);border-radius:12px;padding:14px;text-align:center"><div style="font-size:26px;font-weight:900;color:${avgColor}">${avgPct!==null?avgPct+'%':'—'}</div><div style="font-size:12px;color:var(--muted)">平均成績%</div></div>
+    </div>
+  </div>`;
 
   Object.entries(byGroup).forEach(([groupName,g])=>{
-    const es=g.entries;
-    html+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:14px;">
-      <div style="margin-bottom:12px;">
-        <div style="font-size:15px;font-weight:900;color:var(--purple)">${g.cls||'未知班級'}</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px;">授課老師：${g.teacher||'未知'}</div>
-      </div>
-      <div style="overflow-x:auto;">
-        <table style="width:100%;border-collapse:collapse;font-size:13px;">
-          <thead><tr style="background:rgba(255,255,255,.05);">
-            <th style="padding:8px 10px;text-align:left;border:1px solid var(--border);white-space:nowrap">日期</th>
-            <th style="padding:8px;border:1px solid var(--border);text-align:center">出勤</th>
-            <th style="padding:8px;border:1px solid var(--border);text-align:center">作業</th>
-            <th style="padding:8px;border:1px solid var(--border);text-align:center;min-width:80px">成績</th>
-            <th style="padding:8px;border:1px solid var(--border);text-align:center">上課評分</th>
-            <th style="padding:8px;border:1px solid var(--border);text-align:left">本日進度</th>
-            <th style="padding:8px;border:1px solid var(--border);text-align:left">本日作業</th>
-            <th style="padding:8px;border:1px solid var(--border);text-align:left">下次考試</th>
-          </tr></thead>
-          <tbody>`;
-    es.forEach(e=>{
-      const st=normAtt(e.attendance?.[name]);
-      const hwOk=e.homework?.[name]!==false;
-      const score=e.scores?.[name];
-      const hasScore=score!==''&&score!=null;
-      const max=e.maxScore||100;
-      const pct=hasScore?Math.round(score/max*100):null;
-      const scoreColor=pct===null?'var(--muted)':pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
-      const rating=(e.classRating||{})[name]||0;
-      const ratingColor=['''#ff6b6b','#ff9f43','#ffd166','#a8e063','#56ccb2'][rating]||'var(--muted)';
+    html+=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:14px">
+      <div style="font-size:15px;font-weight:900;color:var(--purple)">${g.cls}</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">授課老師：${g.teacher}</div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:rgba(255,255,255,.05)">
+          <th style="padding:8px;text-align:left;border:1px solid var(--border)">日期</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:center">出勤</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:center">作業</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:center">成績</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:center">評分</th>
+          <th style="padding:8px;border:1px solid var(--border);text-align:left">進度</th>
+        </tr></thead><tbody>`;
+    g.entries.forEach(e=>{
+      const st    = normAtt(e.attendance?.[name]);
+      const hwOk  = e.homework?.[name]!==false;
+      const score = e.scores?.[name];
+      const hasSc = score!==''&&score!=null;
+      const max   = e.maxScore||100;
+      const pct   = hasSc?Math.round(score/max*100):null;
+      const scCol = pct===null?'var(--muted)':pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
+      const rating= (e.classRating||{})[name]||0;
       html+=`<tr>
-        <td style="padding:8px 10px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${ATT_BG[st]}">${ATT_EMOJI[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
+        <td style="padding:8px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${ATT_BG[st]}">${ATT_EMOJI[st]}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scoreColor}">${hasScore?`${score}/${max}<br><span style="font-size:11px">${pct}%</span>`:'—'}</td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${ratingColor}">${rating?`${"⭐".repeat(rating)}<br><span style="font-size:11px">${rating}分</span>`:'—'}</td>
-        <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted);max-width:140px">${e.todayProgress||'—'}</td>
-        <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted);max-width:120px">${e.todayHomework||'—'}</td>
-        <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--red);font-weight:600">${e.nextExam||'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scCol}">${hasSc?`${score}/${max}(${pct}%)`:'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;color:${rating?RATING_COLORS[rating]:'var(--muted)'}">${rating?'⭐'.repeat(rating):'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayProgress||'—'}</td>
       </tr>`;
     });
     html+=`</tbody></table></div></div>`;
   });
 
-  // store for print
-  document.getElementById('printArea').innerHTML=`<div style="font-family:'Noto Sans TC',sans-serif;padding:20px;color:#000;">
-    <h2 style="margin-bottom:4px">百宏文教機構 · 學生個人報表</h2>
-    <h3 style="font-weight:900;margin-bottom:8px">👤 ${name}</h3>
-    <div style="font-size:12px;margin-bottom:16px">產生時間：${new Date().toLocaleString('zh-TW')}</div>
-    ${html.replace(/var\(--[^)]+\)/g,'#333').replace(/rgba\([^)]+\)/g,'#f0f0f0')}
-  </div>`;
-
+  document.getElementById('adminPrintArea').innerHTML=`<div style="font-family:'Noto Sans TC',sans-serif;padding:20px;color:#000;background:#fff"><h2>百宏文教機構 · 學生個人報表</h2><h3>${name}</h3><div style="font-size:12px;margin-bottom:16px">產生時間：${new Date().toLocaleString('zh-TW')}</div>${html}</div>`;
   outEl.innerHTML=html;
   showToast(`✅ 找到 ${name} 的 ${studentEntries.length} 筆跨班記錄`);
 };
 
-window.printStudentReport=function(){
-  const pa=document.getElementById('printArea');
+window.adminPrintStudentReport = function() {
+  const pa=document.getElementById('adminPrintArea');
   if(!pa.innerHTML){showToast('請先產生報表','error');return;}
-  pa.style.display='block';
-  window.print();
-  setTimeout(()=>pa.style.display='none',1000);
+  pa.style.display='block'; window.print(); setTimeout(()=>pa.style.display='none',1000);
 };
 
-
+// ── ADMIN ACCOUNTS ──
+function renderTeachers() {
+  document.getElementById('teacherCount').textContent = teachers.length;
+  document.getElementById('teacherList').innerHTML = teachers.length ? teachers.map(t=>`
+    <div class="teacher-card">
+      <div class="teacher-info">
+        <div class="teacher-name-big">${t.name}</div>
+        <div class="teacher-meta">帳號：${t.userId}　日誌：${allEntries.filter(e=>e.teacherId===t.userId).length} 筆</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="resetPassword('${t._id}','${t.name}')">🔑 重設密碼</button>
+        <button class="btn btn-sm" style="background:rgba(255,107,107,.15);color:var(--red)" onclick="promptDelete('${t._id}','${t.name}')">🗑 刪除</button>
+      </div>
+    </div>`).join('') : '<div class="empty"><div class="empty-icon">👤</div><div>尚無老師帳號</div></div>';
+}
 
 window.addTeacher = async function() {
-  const name = document.getElementById('newName').value.trim();
-  const userId = document.getElementById('newUser').value.trim().toLowerCase();
-  const pass = document.getElementById('newPass').value;
+  const name  = document.getElementById('newName').value.trim();
+  const userId= document.getElementById('newUser').value.trim().toLowerCase();
+  const pass  = document.getElementById('newPass').value;
   const pass2 = document.getElementById('newPass2').value;
-  if (!name||!userId||!pass){showToast('請填寫所有欄位','error');return;}
-  if (pass !== pass2){showToast('兩次密碼不一致','error');return;}
-  if (pass.length < 4){showToast('密碼至少4碼','error');return;}
-  if (teachers.find(t=>t.userId===userId)){showToast('此帳號已存在','error');return;}
-  if (userId==='admin'){showToast('不能使用 admin 作為帳號','error');return;}
-  showLoading('新增帳號中...');
+  if (!name||!userId||!pass) { showToast('請填寫所有欄位','error'); return; }
+  if (pass!==pass2)          { showToast('兩次密碼不一致','error'); return; }
+  if (pass.length<4)         { showToast('密碼至少4碼','error'); return; }
+  if (userId==='admin')      { showToast('不能使用 admin 作為帳號','error'); return; }
+  if (teachers.find(t=>t.userId===userId)) { showToast('此帳號已存在','error'); return; }
+  showLoading('新增帳號...');
   try {
-    await addDoc(collection(db,'teachers'),{ name, userId, password:pass, createdAt:Date.now() });
+    await addDoc(collection(db,'teachers'),{name,userId,password:pass,createdAt:Date.now()});
     showToast(`✅ 已新增：${name}`);
-    document.getElementById('newName').value='';
-    document.getElementById('newUser').value='';
-    document.getElementById('newPass').value='';
-    document.getElementById('newPass2').value='';
-    await loadAll();
-    renderTeachers();
-  } catch(e){showToast('❌ 新增失敗：'+e.message,'error');}
+    ['newName','newUser','newPass','newPass2'].forEach(id=>document.getElementById(id).value='');
+    await adminLoadAll(); renderTeachers();
+  } catch(e) { showToast('❌ 新增失敗：'+e.message,'error'); }
   hideLoading();
 };
 
-window.resetPassword = async function(id, name) {
+window.resetPassword = async function(id,name) {
   const newPass = prompt(`為「${name}」設定新密碼（至少4碼）：`);
   if (!newPass) return;
-  if (newPass.length < 4){showToast('密碼至少4碼','error');return;}
-  showLoading('更新密碼中...');
-  try {
-    await updateDoc(doc(db,'teachers',id),{ password:newPass });
-    showToast(`🔑 ${name} 密碼已更新`);
-    const idx = teachers.findIndex(t=>t._id===id);
-    if(idx>=0) teachers[idx].password = newPass;
-  } catch(e){showToast('❌ 更新失敗','error');}
+  if (newPass.length<4) { showToast('密碼至少4碼','error'); return; }
+  showLoading('更新密碼...');
+  try { await updateDoc(doc(db,'teachers',id),{password:newPass}); showToast(`🔑 ${name} 密碼已更新`); }
+  catch(e) { showToast('❌ 更新失敗','error'); }
   hideLoading();
 };
 
-window.promptDelete = function(id, name) {
-  deleteTargetId = id;
-  document.getElementById('deleteModalSub').textContent = `確定要刪除「${name}」的帳號嗎？此操作無法還原，但不會刪除該老師的日誌記錄。`;
+window.promptDelete = function(id,name) {
+  deleteTargetId=id;
+  document.getElementById('deleteModalSub').textContent=`確定要刪除「${name}」的帳號嗎？`;
   document.getElementById('deleteModal').classList.add('show');
 };
-window.closeModal = function(){document.getElementById('deleteModal').classList.remove('show');deleteTargetId=null;};
-
-window.confirmDelete = async function() {
+window.closeModal   = function() { document.getElementById('deleteModal').classList.remove('show'); deleteTargetId=null; };
+window.confirmDelete= async function() {
   if (!deleteTargetId) return;
   closeModal();
   showLoading('刪除中...');
-  try {
-    await deleteDoc(doc(db,'teachers',deleteTargetId));
-    teachers = teachers.filter(t=>t._id!==deleteTargetId);
-    renderTeachers();
-    showToast('🗑 帳號已刪除');
-  } catch(e){showToast('❌ 刪除失敗','error');}
-  hideLoading();
-  deleteTargetId = null;
+  try { await deleteDoc(doc(db,'teachers',deleteTargetId)); teachers=teachers.filter(t=>t._id!==deleteTargetId); renderTeachers(); showToast('🗑 帳號已刪除'); }
+  catch(e) { showToast('❌ 刪除失敗','error'); }
+  hideLoading(); deleteTargetId=null;
 };
 
-
-window.adminPrintStudentReport = function(){
-  const pa=document.getElementById('adminPrintArea');
-  if(!pa.innerHTML){showToast('請先產生報表','error');return;}
-  pa.style.display='block';
-  window.print();
-  setTimeout(()=>pa.style.display='none',1000);
-};
-
-function showLoading(m){document.getElementById('loadingText').textContent=m;document.getElementById('loadingOverlay').classList.add('show');}
-function hideLoading(){document.getElementById('loadingOverlay').classList.remove('show');}
-window.showToast=function(msg,type='success'){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+type;clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800);};
 </script>
 
 <!-- Admin Delete Modal -->
