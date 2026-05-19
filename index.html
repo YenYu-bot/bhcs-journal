@@ -593,8 +593,8 @@ window.login = async function() {
       const k = localStorage.getItem('openaiKey');
       const apiKeyEl = document.getElementById('apiKey');
       if (k && apiKeyEl) apiKeyEl.value = k;
-      loadClasses();
-      loadEntries();
+      await loadClasses();
+      await loadEntries();
     } else {
       document.getElementById('loginError').style.display = 'block';
     }
@@ -635,7 +635,10 @@ async function loadClasses() {
     const snap = await getDocs(query(collection(db,'classes'), where('teacherId','==',currentUser.id)));
     myClasses = snap.docs.map(d => ({_id:d.id,...d.data()})).sort((a,b) => (a.createdAt||0)-(b.createdAt||0));
     refreshClassSelect();
-  } catch(e) { console.error('loadClasses:', e); }
+  } catch(e) {
+    console.error('loadClasses:', e);
+    showToast('班級資料讀取失敗，請檢查網路或 Firebase 權限', 'error');
+  }
 }
 
 function refreshClassSelect() {
@@ -743,6 +746,7 @@ window.onClassSelect = function() {
   document.getElementById('selectedClassInfo').style.display  = 'block';
   document.getElementById('selectedClassInfo').textContent = `班級：${cls.name}　學生：${cls.students.join('、')}`;
   document.getElementById('journalForm').style.display = 'block';
+
   renderAttendance(); renderHomework(); renderRatingGrid(); renderExams();
 };
 
@@ -758,6 +762,10 @@ window.removeExam = function(id) {
   exams = exams.filter(e=>e.id!==id);
   renderExams();
 };
+window.toggleExamMode = function(id, mode) {
+  const ex=exams.find(e=>e.id===id);
+  if(ex){ex.mode=mode;renderExams();}
+};
 window.updateExamRange = function(id, value) {
   const ex = exams.find(e => e.id === id);
   if (ex) ex.range = value;
@@ -768,10 +776,6 @@ window.updateExamMaxScore = function(id, value) {
     ex.maxScore = parseFloat(value) || 100;
     renderExams();
   }
-};
-window.toggleExamMode = function(id, mode) {
-  const ex=exams.find(e=>e.id===id);
-  if(ex){ex.mode=mode;renderExams();}
 };
 
 function renderExams() {
