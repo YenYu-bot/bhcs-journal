@@ -501,6 +501,41 @@ function normAtt(v) {
   return ATT_STATES.includes(v) ? v : 'present';
 }
 
+// Get all exam scores for a student from an entry (handles both old e.scores and new e.exams)
+function getStudentScores(e, name) {
+  // New format: e.exams array
+  if (e.exams && e.exams.length) {
+    return e.exams
+      .filter(ex => ex.scores?.[name]!==''&&ex.scores?.[name]!=null)
+      .map(ex => ({
+        range: ex.range||'',
+        mode:  ex.mode||'score',
+        score: ex.scores[name],
+        max:   ex.maxScore||100
+      }));
+  }
+  // Old format: e.scores + e.maxScore
+  const v = e.scores?.[name];
+  if (v!==''&&v!=null) {
+    return [{ range:'', mode:'score', score:v, max:e.maxScore||100 }];
+  }
+  return [];
+}
+
+// Render a compact score cell for student report tables
+function renderScoreCell(e, name) {
+  const scores = getStudentScores(e, name);
+  if (!scores.length) return '—';
+  return scores.map(s => {
+    if (s.mode==='grade') {
+      return `<span style="color:${GRADE_COLORS[s.score]||'var(--text)'};font-weight:700">${s.score}</span>`;
+    }
+    const pct = Math.round(parseFloat(s.score)/s.max*100);
+    const col = pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
+    return `<span style="color:${col};font-weight:700">${s.score}/${s.max}<br><span style="font-size:10px">${pct}%</span></span>`;
+  }).join('<br>');
+}
+
 // ── State ──
 let currentUser     = null;   // { id, name }
 let myClasses       = [];     // teacher's classes
@@ -869,7 +904,7 @@ function renderHistory() {
     const hwMiss    = sts.filter(s => hwVal(e.homework?.[s])!=='good');
     const absentCount = sts.filter(s => normAtt(attMap[s])==='absent').length;
     const lateCount   = sts.filter(s => attMap[s]==='late').length;
-    const entryExams  = e.exams||[];
+    const entryExams  = e.exams?.length ? e.exams : (Object.keys(e.scores||{}).some(k=>e.scores[k]!==''&&e.scores[k]!=null) ? [{id:0,range:'',mode:'score',maxScore:e.maxScore||100,scores:e.scores||{}}] : []);
     const hasScores   = entryExams.some(ex=>sts.some(s=>ex.scores?.[s]!==''&&ex.scores?.[s]!=null));
     const ratingMap   = e.classRating||{};
     const ratedStudents = sts.filter(s => ratingMap[s]>0);
@@ -1133,9 +1168,9 @@ window.generateStudentReport = function() {
   studentEntries.forEach(e=>{const k=e.className||'未知';if(!byClass[k])byClass[k]=[];byClass[k].push(e);});
   const totalPresent = studentEntries.filter(e=>normAtt(e.attendance?.[name])==='present').length;
   const totalAbsent  = studentEntries.length-totalPresent;
-  const totalHwDone  = studentEntries.filter(e=>e.homework?.[name]!==false).length;
-  const scoreList    = studentEntries.filter(e=>e.scores?.[name]!==''&&e.scores?.[name]!=null);
-  const avgPct       = scoreList.length ? Math.round(scoreList.reduce((a,e)=>a+e.scores[name]/(e.maxScore||100)*100,0)/scoreList.length) : null;
+  const totalHwDone  = studentEntries.filter(e=>hwVal(e.homework?.[name])==='good').length;
+  const scoreList    = studentEntries.flatMap(e=>getStudentScores(e,name).filter(s=>s.mode!=='grade'));
+  const avgPct       = scoreList.length ? Math.round(scoreList.reduce((a,s)=>a+parseFloat(s.score)/s.max*100,0)/scoreList.length) : null;
   const avgColor     = avgPct===null?'var(--muted)':avgPct>=90?'var(--teal)':avgPct>=60?'var(--yellow)':'var(--red)';
   const ratingList   = studentEntries.filter(e=>(e.classRating||{})[name]>0);
   const avgRating    = ratingList.length ? (ratingList.reduce((a,e)=>a+(e.classRating[name]||0),0)/ratingList.length).toFixed(1) : null;
@@ -1167,19 +1202,15 @@ window.generateStudentReport = function() {
         </tr></thead><tbody>`;
     es.forEach(e=>{
       const st     = normAtt(e.attendance?.[name]);
-      const hwOk   = e.homework?.[name]!==false;
-      const score  = e.scores?.[name];
-      const hasSc  = score!==''&&score!=null;
-      const max    = e.maxScore||100;
-      const pct    = hasSc?Math.round(score/max*100):null;
-      const scColor= pct===null?'var(--muted)':pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
+      const hw     = hwVal(e.homework?.[name]);
+      const hwBg   = hw==='good'?'rgba(86,204,178,.15)':hw==='partial'?'rgba(255,209,102,.15)':'rgba(255,107,107,.15)';
       const rating = (e.classRating||{})[name]||0;
       const rColor = rating?RATING_COLORS[rating]:'var(--muted)';
       html+=`<tr>
         <td style="padding:8px 10px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${ATT_BG[st]}">${ATT_EMOJI[st]} <span style="font-size:11px">${ATT_LABELS[st]}</span></td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scColor}">${hasSc?`${score}/${max} (${pct}%)`:'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwBg}">${HW_EMOJI[hw]} <span style="font-size:11px">${HW_LABELS[hw]}</span></td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;line-height:1.6">${renderScoreCell(e,name)}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${rColor}">${rating?`${'⭐'.repeat(rating)} ${rating}分`:'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayProgress||'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayHomework||'—'}</td>
@@ -1280,7 +1311,7 @@ function adminEntryCard(e, prefix) {
   const sts    = e.students||[];
   const absent = sts.filter(s=>normAtt(e.attendance?.[s])!=='present');
   const hwMiss = sts.filter(s=>hwVal(e.homework?.[s])!=='good');
-  const entryExams = e.exams||[];
+  const entryExams = e.exams?.length ? e.exams : (Object.keys(e.scores||{}).some(k=>e.scores[k]!==''&&e.scores[k]!=null) ? [{id:0,range:'',mode:'score',maxScore:e.maxScore||100,scores:e.scores||{}}] : []);
   const hasSc  = entryExams.some(ex=>sts.some(s=>ex.scores?.[s]!==''&&ex.scores?.[s]!=null));
   return `<div class="entry-card">
     <div class="entry-header" onclick="adminToggle('${prefix}')">
@@ -1371,9 +1402,9 @@ window.adminStudentSearch = function() {
 
   const totalPresent = studentEntries.filter(e=>normAtt(e.attendance?.[name])==='present').length;
   const totalAbsent  = studentEntries.length-totalPresent;
-  const totalHwDone  = studentEntries.filter(e=>e.homework?.[name]!==false).length;
-  const scoreList    = studentEntries.filter(e=>e.scores?.[name]!==''&&e.scores?.[name]!=null);
-  const avgPct       = scoreList.length?Math.round(scoreList.reduce((a,e)=>a+e.scores[name]/(e.maxScore||100)*100,0)/scoreList.length):null;
+  const totalHwDone  = studentEntries.filter(e=>hwVal(e.homework?.[name])==='good').length;
+  const scoreList2   = studentEntries.flatMap(e=>getStudentScores(e,name).filter(s=>s.mode!=='grade'));
+  const avgPct       = scoreList2.length?Math.round(scoreList2.reduce((a,s)=>a+parseFloat(s.score)/s.max*100,0)/scoreList2.length):null;
   const avgColor     = avgPct===null?'var(--muted)':avgPct>=90?'var(--teal)':avgPct>=60?'var(--yellow)':'var(--red)';
 
   let html=`<div style="background:rgba(192,132,252,.08);border:1px solid rgba(192,132,252,.25);border-radius:14px;padding:18px;margin-bottom:18px">
@@ -1402,18 +1433,14 @@ window.adminStudentSearch = function() {
         </tr></thead><tbody>`;
     g.entries.forEach(e=>{
       const st    = normAtt(e.attendance?.[name]);
-      const hwOk  = e.homework?.[name]!==false;
-      const score = e.scores?.[name];
-      const hasSc = score!==''&&score!=null;
-      const max   = e.maxScore||100;
-      const pct   = hasSc?Math.round(score/max*100):null;
-      const scCol = pct===null?'var(--muted)':pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
+      const hw    = hwVal(e.homework?.[name]);
+      const hwBg  = hw==='good'?'rgba(86,204,178,.15)':hw==='partial'?'rgba(255,209,102,.15)':'rgba(255,107,107,.15)';
       const rating= (e.classRating||{})[name]||0;
       html+=`<tr>
         <td style="padding:8px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${e.date} 星期${e.weekday||''}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${ATT_BG[st]}">${ATT_EMOJI[st]}</td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwOk?'rgba(86,204,178,.15)':'rgba(255,209,102,.15)'}">${hwOk?'✅':'⚠️'}</td>
-        <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${scCol}">${hasSc?`${score}/${max}(${pct}%)`:'—'}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;background:${hwBg}">${HW_EMOJI[hw]}</td>
+        <td style="padding:8px;border:1px solid var(--border);text-align:center;line-height:1.6">${renderScoreCell(e,name)}</td>
         <td style="padding:8px;border:1px solid var(--border);text-align:center;color:${rating?RATING_COLORS[rating]:'var(--muted)'}">${rating?'⭐'.repeat(rating):'—'}</td>
         <td style="padding:8px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${e.todayProgress||'—'}</td>
       </tr>`;
