@@ -591,10 +591,9 @@ window.login = async function() {
       showPage('teacher');
       document.getElementById('teacherBadge').textContent = t.name;
       const k = localStorage.getItem('openaiKey');
-      const apiKeyEl = document.getElementById('apiKey');
-      if (k && apiKeyEl) apiKeyEl.value = k;
-      await loadClasses();
-      await loadEntries();
+      if (k && document.getElementById('apiKey')) document.getElementById('apiKey').value = k;
+      loadClasses();
+      loadEntries();
     } else {
       document.getElementById('loginError').style.display = 'block';
     }
@@ -635,10 +634,7 @@ async function loadClasses() {
     const snap = await getDocs(query(collection(db,'classes'), where('teacherId','==',currentUser.id)));
     myClasses = snap.docs.map(d => ({_id:d.id,...d.data()})).sort((a,b) => (a.createdAt||0)-(b.createdAt||0));
     refreshClassSelect();
-  } catch(e) {
-    console.error('loadClasses:', e);
-    showToast('班級資料讀取失敗，請檢查網路或 Firebase 權限', 'error');
-  }
+  } catch(e) { console.error('loadClasses:', e); }
 }
 
 function refreshClassSelect() {
@@ -750,6 +746,71 @@ window.onClassSelect = function() {
   renderAttendance(); renderHomework(); renderRatingGrid(); renderExams();
 };
 
+
+// ── RENDER STUDENT INPUT BLOCKS ──
+function renderAttendance() {
+  const el = document.getElementById('attendanceGrid');
+  if (!el) return;
+  el.innerHTML = currentStudents.map((s, i) => {
+    const st = normAtt(attendance[s]);
+    return `<div class="att-chip ${ATT_CLASSES[st]}" onclick="cycleAttByIndex(${i})">
+      <span style="font-size:18px">${ATT_EMOJI[st]}</span>
+      <span class="chip-name">${s}</span>
+      <span class="att-status">${ATT_LABELS[st]}</span>
+    </div>`;
+  }).join('');
+}
+window.cycleAttByIndex = function(i) {
+  const s = currentStudents[i];
+  if (!s) return;
+  const now = normAtt(attendance[s]);
+  const idx = ATT_STATES.indexOf(now);
+  attendance[s] = ATT_STATES[(idx + 1) % ATT_STATES.length];
+  renderAttendance();
+};
+
+function renderHomework() {
+  const el = document.getElementById('homeworkGrid');
+  if (!el) return;
+  el.innerHTML = currentStudents.map((s, i) => {
+    const hw = hwVal(homework[s]);
+    return `<div class="hw-chip ${HW_CLASSES[hw]}" onclick="cycleHomeworkByIndex(${i})">
+      <span style="font-size:18px">${HW_EMOJI[hw]}</span>
+      <span class="chip-name">${s}</span>
+      <span class="att-status">${HW_LABELS[hw]}</span>
+    </div>`;
+  }).join('');
+}
+window.cycleHomeworkByIndex = function(i) {
+  const s = currentStudents[i];
+  if (!s) return;
+  const now = hwVal(homework[s]);
+  const idx = HW_STATES.indexOf(now);
+  homework[s] = HW_STATES[(idx + 1) % HW_STATES.length];
+  renderHomework();
+};
+
+function renderRatingGrid() {
+  const el = document.getElementById('ratingGrid');
+  if (!el) return;
+  el.innerHTML = currentStudents.map((s, i) => {
+    const r = Number(classRating[s] || 0);
+    return `<div class="rating-row">
+      <span class="rating-name">${s}</span>
+      <div class="rating-stars">
+        ${[1,2,3,4,5].map(n => `<button class="star-btn ${n<=r?'active':''}" onclick="setRatingByIndex(${i},${n})" title="${RATING_LABELS[n]}">⭐</button>`).join('')}
+      </div>
+      <span class="rating-label" style="color:${r?RATING_COLORS[r]:'var(--muted)'}">${r?r+'分':'-'}</span>
+    </div>`;
+  }).join('');
+}
+window.setRatingByIndex = function(i, val) {
+  const s = currentStudents[i];
+  if (!s) return;
+  classRating[s] = Number(classRating[s] || 0) === val ? 0 : val;
+  renderRatingGrid();
+};
+
 // ── MULTI-EXAM SYSTEM ──
 let examIdCounter = 1;
 
@@ -772,10 +833,7 @@ window.updateExamRange = function(id, value) {
 };
 window.updateExamMaxScore = function(id, value) {
   const ex = exams.find(e => e.id === id);
-  if (ex) {
-    ex.maxScore = parseFloat(value) || 100;
-    renderExams();
-  }
+  if (ex) { ex.maxScore = parseFloat(value) || 100; renderExams(); }
 };
 
 function renderExams() {
