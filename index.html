@@ -453,7 +453,7 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
-import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, where } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
+import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, setDoc, query, where } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
 
 // ── Firebase ──
 const firebaseConfig = {
@@ -1193,7 +1193,7 @@ window.printReport = function(outputId='reportOutput') {
 
 // ── ADMIN ──
 window.adminSwitchTab = function(name, el) {
-  ['overview','entries','stats','student','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
+  ['overview','entries','stats','student','schedule','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
   document.querySelectorAll('#adminPage .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('admin-tab-'+name).style.display='block';
   el.classList.add('active');
@@ -1201,14 +1201,21 @@ window.adminSwitchTab = function(name, el) {
   if (name==='stats')   adminRenderStats();
   if (name==='accounts') renderTeachers();
   if (name==='student') renderAdminStudentPick();
+  if (name==='schedule') { renderScheduleEditor(); renderScheduleStatusBanner(); }
 };
 
 async function adminLoadAll() {
   showLoading('載入資料...');
   try { const s=await getDocs(collection(db,'entries')); allEntries=s.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0)); } catch(e) { console.error(e); allEntries=[]; }
   try { const s=await getDocs(collection(db,'teachers')); teachers=s.docs.map(d=>({_id:d.id,...d.data()})); } catch(e) { console.error(e); teachers=[]; }
+  await loadSchedule();
   hideLoading();
   adminRenderOverview(); adminPopulateFilters(); renderAdminStudentPick();
+  // Pre-fill check date with today
+  const today = new Date();
+  const todayISO = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const checkDateEl = document.getElementById('checkDate');
+  if (checkDateEl) checkDateEl.value = todayISO;
 }
 window.adminRefresh = function() { adminLoadAll().then(()=>showToast('🔄 已更新')); };
 
@@ -1221,6 +1228,8 @@ function adminRenderOverview() {
     <div class="summary-card"><div class="summary-num" style="color:var(--red)">${totalAbsent}</div><div class="summary-lbl">累計缺席次</div></div>
     <div class="summary-card"><div class="summary-num" style="color:var(--yellow)">${totalHwMiss}</div><div class="summary-lbl">累計未繳次</div></div>`;
   document.getElementById('recentList').innerHTML = allEntries.slice(0,8).map((e,i)=>adminEntryCard(e,'r'+i)).join('') || '<div class="empty"><div class="empty-icon">📭</div><div>尚無日誌</div></div>';
+  // Show today's schedule status in overview
+  renderScheduleStatusBanner();
 }
 
 function adminPopulateFilters() {
@@ -1394,6 +1403,154 @@ window.adminPrintStudentReport = function() {
   pa.style.display='block'; window.print(); setTimeout(()=>pa.style.display='none',1000);
 };
 
+// ── SCHEDULE ──
+const WEEKDAYS_LIST = ['一','二','三','四','五','六','日'];
+let schedule = {}; // { teacherId: ['一','三','五', ...] }
+
+async function loadSchedule() {
+  try {
+    const snap = await getDocs(collection(db,'schedule'));
+    schedule = {};
+    snap.docs.forEach(d => { schedule[d.id] = d.data().days||[]; });
+  } catch(e) { console.error('loadSchedule:', e); }
+}
+
+function renderScheduleEditor() {
+  const el = document.getElementById('scheduleEditor');
+  if (!el) return;
+  if (!teachers.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:13px">請先在「帳號管理」新增老師帳號</div>';
+    return;
+  }
+  el.innerHTML = teachers.map(t => {
+    const days = schedule[t.userId] || [];
+    return `<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+      <div style="min-width:90px;font-size:14px;font-weight:700">${t.name}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${WEEKDAYS_LIST.map(d => {
+          const active = days.includes(d);
+          return `<button onclick="toggleScheduleDay('${t.userId}','${d}')" id="sched_${t.userId}_${d}"
+            style="${active
+              ? 'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;border:none;'
+              : 'background:var(--surface3);color:var(--muted);border:1px solid var(--border);'}
+              border-radius:8px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;min-width:42px;">
+            週${d}
+          </button>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+window.toggleScheduleDay = function(userId, day) {
+  if (!schedule[userId]) schedule[userId] = [];
+  const idx = schedule[userId].indexOf(day);
+  if (idx >= 0) schedule[userId].splice(idx, 1);
+  else schedule[userId].push(day);
+  // Update button style immediately
+  const btn = document.getElementById(`sched_${userId}_${day}`);
+  if (btn) {
+    const active = schedule[userId].includes(day);
+    btn.style.cssText = (active
+      ? 'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;border:none;'
+      : 'background:var(--surface3);color:var(--muted);border:1px solid var(--border);')
+      + 'border-radius:8px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;min-width:42px;';
+  }
+};
+
+window.saveSchedule = async function() {
+  showLoading('儲存課表...');
+  try {
+    // Save each teacher's schedule as a doc with their userId
+    const promises = Object.entries(schedule).map(([userId, days]) =>
+      setDoc(doc(db,'schedule',userId), {days, updatedAt:Date.now()})
+    );
+    // Also save teachers with no days set (clear their schedule)
+    teachers.forEach(t => {
+      if (!schedule[t.userId]) {
+        promises.push(setDoc(doc(db,'schedule',t.userId), {days:[], updatedAt:Date.now()}));
+      }
+    });
+    await Promise.all(promises);
+    showToast('💾 課表已儲存');
+    renderScheduleStatusBanner();
+  } catch(e) { showToast('❌ 儲存失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+function renderScheduleStatusBanner() {
+  const banner = document.getElementById('scheduleStatusBanner');
+  if (!banner) return;
+  const now     = new Date();
+  const todayWD = WEEKDAYS_LIST[now.getDay()===0 ? 6 : now.getDay()-1]; // 一~日
+  const mm      = String(now.getMonth()+1).padStart(2,'0');
+  const dd      = String(now.getDate()).padStart(2,'0');
+  const todayStr= `${mm}/${dd}`;
+
+  // Teachers scheduled today
+  const scheduledToday = teachers.filter(t => (schedule[t.userId]||[]).includes(todayWD));
+  if (!scheduledToday.length) {
+    banner.innerHTML = `<div style="background:rgba(86,204,178,.08);border:1px solid rgba(86,204,178,.2);border-radius:12px;padding:14px;font-size:13px;color:var(--muted)">今天（週${todayWD}）沒有排課</div>`;
+    return;
+  }
+
+  // Check who filed today
+  const filedToday = new Set(
+    allEntries.filter(e => entryDateToMMDD(e.date) === todayStr).map(e => e.teacherId)
+  );
+  const filed   = scheduledToday.filter(t => filedToday.has(t.userId));
+  const missing = scheduledToday.filter(t => !filedToday.has(t.userId));
+
+  banner.innerHTML = `
+    <div style="background:${missing.length?'rgba(255,107,107,.08)':'rgba(86,204,178,.08)'};border:1px solid ${missing.length?'rgba(255,107,107,.25)':'rgba(86,204,178,.25)'};border-radius:12px;padding:16px;">
+      <div style="font-size:14px;font-weight:700;color:${missing.length?'var(--red)':'var(--teal)'};margin-bottom:10px;">
+        ${missing.length ? `⚠️ 今天（週${todayWD} ${todayStr}）有 ${missing.length} 位老師尚未填寫日誌` : `✅ 今天（週${todayWD} ${todayStr}）所有老師都已填寫日誌`}
+      </div>
+      ${missing.length ? `<div style="margin-bottom:8px"><span style="font-size:12px;color:var(--muted)">未填寫：</span>${missing.map(t=>`<span style="display:inline-block;background:rgba(255,107,107,.2);color:var(--red);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px">${t.name}</span>`).join('')}</div>` : ''}
+      ${filed.length ? `<div><span style="font-size:12px;color:var(--muted)">已填寫：</span>${filed.map(t=>`<span style="display:inline-block;background:rgba(86,204,178,.2);color:var(--teal);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px">${t.name}</span>`).join('')}</div>` : ''}
+    </div>`;
+}
+
+window.checkMissingLogs = function() {
+  const dateVal = document.getElementById('checkDate').value;
+  if (!dateVal) { showToast('請選擇日期','error'); return; }
+
+  const parts   = dateVal.split('-');
+  const mmdd    = `${parts[1]}/${parts[2]}`;
+  const dayIdx  = new Date(dateVal).getDay(); // 0=Sun
+  const weekday = WEEKDAYS_LIST[dayIdx===0 ? 6 : dayIdx-1];
+
+  const scheduledOnDay = teachers.filter(t => (schedule[t.userId]||[]).includes(weekday));
+  const filedOnDay     = new Set(allEntries.filter(e => entryDateToMMDD(e.date)===mmdd).map(e=>e.teacherId));
+
+  const filed   = scheduledOnDay.filter(t => filedOnDay.has(t.userId));
+  const missing = scheduledOnDay.filter(t => !filedOnDay.has(t.userId));
+  const noClass = teachers.filter(t => !(schedule[t.userId]||[]).includes(weekday));
+
+  const el = document.getElementById('missingLogsResult');
+  if (!scheduledOnDay.length) {
+    el.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:12px 0">${dateVal}（週${weekday}）沒有老師排課</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">${dateVal}（週${weekday}）排課 ${scheduledOnDay.length} 位老師</div>
+    ${missing.length ? `
+    <div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.2);border-radius:10px;padding:14px;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px;">❌ 尚未填寫（${missing.length} 位）</div>
+      <div>${missing.map(t=>`<span style="display:inline-block;background:rgba(255,107,107,.2);color:var(--red);border-radius:20px;padding:4px 12px;font-size:13px;font-weight:700;margin:3px">${t.name}</span>`).join('')}</div>
+    </div>` : ''}
+    ${filed.length ? `
+    <div style="background:rgba(86,204,178,.08);border:1px solid rgba(86,204,178,.2);border-radius:10px;padding:14px;margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;color:var(--teal);margin-bottom:8px;">✅ 已填寫（${filed.length} 位）</div>
+      <div>${filed.map(t=>`<span style="display:inline-block;background:rgba(86,204,178,.2);color:var(--teal);border-radius:20px;padding:4px 12px;font-size:13px;font-weight:700;margin:3px">${t.name}</span>`).join('')}</div>
+    </div>` : ''}
+    ${noClass.length ? `
+    <div style="background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px;padding:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:8px;">📵 當天無課（${noClass.length} 位）</div>
+      <div>${noClass.map(t=>`<span style="display:inline-block;background:rgba(255,255,255,.07);color:var(--muted);border-radius:20px;padding:4px 12px;font-size:13px;margin:3px">${t.name}</span>`).join('')}</div>
+    </div>` : ''}`;
+};
+
 // ── ADMIN ACCOUNTS ──
 function renderTeachers() {
   document.getElementById('teacherCount').textContent = teachers.length;
@@ -1489,11 +1646,13 @@ window.confirmDelete= async function() {
       <button class="tab" onclick="adminSwitchTab('entries',this)">📋 所有日誌</button>
       <button class="tab" onclick="adminSwitchTab('stats',this)">📈 老師統計</button>
       <button class="tab" onclick="adminSwitchTab('student',this)">👤 學生查詢</button>
+      <button class="tab" onclick="adminSwitchTab('schedule',this)">📅 周課表</button>
       <button class="tab" onclick="adminSwitchTab('accounts',this)">⚙️ 帳號管理</button>
     </div>
 
     <!-- OVERVIEW -->
     <div id="admin-tab-overview">
+      <div id="scheduleStatusBanner" style="margin-bottom:14px;"></div>
       <div class="summary-grid" id="summaryGrid"></div>
       <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:12px;">📅 最近日誌</div>
       <div id="recentList"></div>
@@ -1543,6 +1702,36 @@ window.confirmDelete= async function() {
         <button class="btn btn-ghost" style="padding:12px 18px;" onclick="adminPrintStudentReport()">🖨 列印</button>
       </div>
       <div id="adminStudentOutput"></div>
+    </div>
+
+    <!-- SCHEDULE -->
+    <div id="admin-tab-schedule" style="display:none;">
+
+      <!-- Today's status banner -->
+      <div id="scheduleStatusBanner" style="margin-bottom:18px;"></div>
+
+      <!-- Schedule editor -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <div style="font-size:15px;font-weight:700;">📅 設定周課表</div>
+          <button class="btn btn-teal btn-sm" onclick="saveSchedule()">💾 儲存課表</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">設定每位老師每週固定上課的日期，系統將在當天提醒哪些老師尚未填寫日誌。</div>
+        <div id="scheduleEditor"></div>
+      </div>
+
+      <!-- Missing log check -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <div style="font-size:15px;font-weight:700;">🔍 日誌填寫狀況查詢</div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="date" id="checkDate"
+              style="background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none;">
+            <button class="btn btn-purple btn-sm" onclick="checkMissingLogs()">🔍 查詢</button>
+          </div>
+        </div>
+        <div id="missingLogsResult"></div>
+      </div>
     </div>
 
     <!-- ACCOUNTS -->
