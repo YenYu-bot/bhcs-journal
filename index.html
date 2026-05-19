@@ -76,8 +76,17 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
 /* Homework chips */
 .student-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
 .hw-chip{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;cursor:pointer;user-select:none;transition:all .15s;}
-.hw-done{background:rgba(86,204,178,.1);border:1px solid rgba(86,204,178,.2);}
-.hw-miss{background:rgba(255,209,102,.1);border:1px solid rgba(255,209,102,.3);}
+.hw-good{background:rgba(86,204,178,.1);border:1px solid rgba(86,204,178,.2);}
+.hw-good .att-status{background:rgba(86,204,178,.2);color:var(--teal);}
+.hw-partial{background:rgba(255,209,102,.1);border:1px solid rgba(255,209,102,.3);}
+.hw-partial .att-status{background:rgba(255,209,102,.2);color:var(--yellow);}
+.hw-missing{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);}
+.hw-missing .att-status{background:rgba(255,107,107,.2);color:var(--red);}
+/* exam block */
+.exam-block{background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px;}
+.exam-block:last-child{margin-bottom:0;}
+.exam-header{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+.exam-label{font-size:13px;font-weight:700;color:var(--teal);}
 .chip-name{font-size:14px;font-weight:700;}
 
 /* Score table */
@@ -282,21 +291,6 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
       </div>
 
       <div id="journalForm" style="display:none;">
-        <div class="api-box">
-          <div style="color:var(--teal);font-weight:700;font-size:13px;margin-bottom:8px;">🔑 OpenAI API Key（上傳照片識別用，可選）</div>
-          <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">申請：<a href="https://platform.openai.com/api-keys" target="_blank" style="color:var(--teal);">platform.openai.com/api-keys</a>　每張約 $0.005 美元</div>
-          <input type="password" class="api-key-input" id="apiKey" placeholder="sk-..." oninput="localStorage.setItem('openaiKey',this.value)">
-        </div>
-
-        <div class="upload-zone" id="uploadZone" onclick="document.getElementById('photoInput').click()" ondrop="handleDrop(event)" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)">
-          <div id="uploadContent">
-            <div style="font-size:32px;margin-bottom:6px;">📷</div>
-            <div style="color:var(--teal);font-weight:700;font-size:14px;">點擊或拖曳上傳日誌照片（選用）</div>
-            <div style="color:var(--muted);font-size:12px;margin-top:4px;">AI 自動識別出缺勤、作業、成績</div>
-          </div>
-          <input type="file" id="photoInput" accept="image/*" style="display:none" onchange="handlePhoto(this.files[0])">
-        </div>
-
         <div class="field-row">
           <div><label class="field-label">日期</label><input class="field-input" id="fDate" placeholder="05/13"></div>
           <div><label class="field-label">星期</label>
@@ -323,10 +317,18 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
           <div class="att-grid" id="attendanceGrid"></div>
         </div>
 
-        <!-- HOMEWORK -->
+        <!-- HOMEWORK – 3 levels -->
         <div class="card">
-          <div class="card-title">📝 作業繳交（點擊切換）</div>
-          <div class="student-grid" id="homeworkGrid"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div class="card-title" style="margin-bottom:0">📝 作業繳交</div>
+            <div style="display:flex;gap:6px;font-size:11px;flex-wrap:wrap;">
+              <span style="color:var(--teal)">●優良</span>
+              <span style="color:var(--yellow)">●部分未完成</span>
+              <span style="color:var(--red)">●未完成/沒帶</span>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">點擊學生依序切換狀態</div>
+          <div class="att-grid" id="homeworkGrid"></div>
         </div>
 
         <!-- CLASS RATING -->
@@ -338,39 +340,14 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
           <div id="ratingGrid"></div>
         </div>
 
-        <!-- SCORES -->
+        <!-- SCORES – multiple exams -->
         <div class="card">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
             <div class="card-title" style="margin-bottom:0">🏆 考試成績</div>
-            <!-- Mode toggle -->
-            <div style="display:flex;gap:0;background:var(--surface3);border:1px solid var(--border);border-radius:10px;padding:3px;">
-              <button id="scoreModeScore" onclick="toggleScoreMode('score')"
-                style="flex:1;padding:7px 14px;border:none;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;">
-                🔢 分數
-              </button>
-              <button id="scoreModeGrade" onclick="toggleScoreMode('grade')"
-                style="flex:1;padding:7px 14px;border:none;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--muted);">
-                🅰 等第
-              </button>
-            </div>
+            <button onclick="addExam()" style="background:linear-gradient(135deg,var(--teal),#2ecc71);border:none;border-radius:8px;padding:7px 14px;color:#0d1117;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;">＋ 新增考試</button>
           </div>
-          <!-- Max score row (hidden in grade mode) -->
-          <div id="maxScoreRow" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-            <label style="font-size:12px;color:var(--muted);font-weight:600;">本次滿分</label>
-            <input type="number" id="maxScore" value="100" min="1" max="9999"
-              style="width:72px;background:var(--surface3);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:5px 8px;color:var(--text);font-family:inherit;font-size:14px;text-align:center;outline:none;"
-              oninput="updateScoreHeader()">
-            <span style="font-size:12px;color:var(--muted);">分</span>
-          </div>
-          <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">若本次沒有考試，留空即可</div>
-          <table class="score-table">
-            <thead><tr>
-              <th>學生</th>
-              <th id="scoreHeader">成績（/100）</th>
-              <th>結果</th>
-            </tr></thead>
-            <tbody id="scoreBody"></tbody>
-          </table>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:12px;">可新增多次考試，留空表示當天無考試</div>
+          <div id="examsContainer"></div>
         </div>
 
         <!-- COURSE INFO -->
@@ -504,7 +481,8 @@ const GRADE_COLORS = {'A++':'#56ccb2','A+':'#56ccb2','A':'#a8e063','B++':'#ffd16
 const ADMIN_USER = 'admin';
 const ADMIN_PASS = 'admin888';
 
-let scoreMode = 'score'; // 'score' | 'grade'
+let scoreMode = 'score'; // kept for compat
+let exams = []; // [{id,range,mode,maxScore,scores:{name:val}}]
 
 function normAtt(v) {
   if (v === true  || v === 'present') return 'present';
@@ -518,7 +496,7 @@ let myClasses       = [];     // teacher's classes
 let entries         = [];     // teacher's entries
 let currentStudents = [];
 let attendance      = {};
-let homework        = {};
+let homework        = {}; // 'good'|'partial'|'missing'
 let classRating     = {};
 
 // admin state
@@ -701,7 +679,9 @@ window.onClassSelect = function() {
 
   currentStudents = [...cls.students];
   attendance  = {}; homework = {}; classRating = {};
-  currentStudents.forEach(s => { attendance[s]='present'; homework[s]=true; classRating[s]=0; });
+  currentStudents.forEach(s => { attendance[s]='present'; homework[s]='good'; classRating[s]=0; });
+  exams=[{id:0,range:'',mode:'score',maxScore:100,scores:{}}];
+  examIdCounter=1;
 
   // Auto-fill today
   const now = new Date();
@@ -719,177 +699,109 @@ window.onClassSelect = function() {
   document.getElementById('journalForm').style.display = 'block';
   document.getElementById('uploadContent').innerHTML = '<div style="font-size:32px;margin-bottom:6px">📷</div><div style="color:var(--teal);font-weight:700;font-size:14px">點擊或拖曳上傳日誌照片（選用）</div><div style="color:var(--muted);font-size:12px;margin-top:4px">AI 自動識別出缺勤、作業、成績</div>';
 
-  renderAttendance(); renderHomework(); renderRatingGrid(); renderScoreTable();
+  renderAttendance(); renderHomework(); renderRatingGrid(); renderExams();
 };
 
-window.updateScoreHeader = function() {
-  const max = document.getElementById('maxScore').value || '100';
-  document.getElementById('scoreHeader').textContent = scoreMode==='grade' ? '等第' : `成績（/${max}）`;
+// ── MULTI-EXAM SYSTEM ──
+let examIdCounter = 1;
+
+window.addExam = function() {
+  exams.push({id:examIdCounter++, range:'', mode:'score', maxScore:100, scores:{}});
+  renderExams();
+};
+window.removeExam = function(id) {
+  if (exams.length<=1){showToast('至少保留一筆考試記錄','error');return;}
+  exams = exams.filter(e=>e.id!==id);
+  renderExams();
+};
+window.toggleExamMode = function(id, mode) {
+  const ex=exams.find(e=>e.id===id);
+  if(ex){ex.mode=mode;renderExams();}
 };
 
-window.toggleScoreMode = function(mode) {
-  scoreMode = mode;
-  updateScoreModeUI();
-  renderScoreTable();
-};
-
-function updateScoreModeUI() {
-  const isGrade = scoreMode === 'grade';
-  const btnScore = document.getElementById('scoreModeScore');
-  const btnGrade = document.getElementById('scoreModeGrade');
-  if (btnScore) btnScore.style.cssText = !isGrade
-    ? 'flex:1;padding:7px;border:none;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;'
-    : 'flex:1;padding:7px;border:none;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--muted);';
-  if (btnGrade) btnGrade.style.cssText = isGrade
-    ? 'flex:1;padding:7px;border:none;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;'
-    : 'flex:1;padding:7px;border:none;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;background:none;color:var(--muted);';
-  const maxRow = document.getElementById('maxScoreRow');
-  if (maxRow) maxRow.style.display = isGrade ? 'none' : 'flex';
-  updateScoreHeader();
-}
-
-function renderAttendance() {
-  document.getElementById('attendanceGrid').innerHTML = currentStudents.map(s => `
-    <div class="att-chip ${ATT_CLASSES[attendance[s]||'present']}" onclick="cycleAtt('${s}')">
-      <span class="chip-name">${s}</span>
-      <span class="att-status">${ATT_LABELS[attendance[s]||'present']}</span>
-    </div>`).join('');
-}
-window.cycleAtt = function(s) {
-  const idx = ATT_STATES.indexOf(attendance[s]||'present');
-  attendance[s] = ATT_STATES[(idx+1) % ATT_STATES.length];
-  renderAttendance();
-};
-
-function renderHomework() {
-  document.getElementById('homeworkGrid').innerHTML = currentStudents.map(s => `
-    <div class="hw-chip ${homework[s]?'hw-done':'hw-miss'}" onclick="toggleH('${s}')">
-      <span style="font-size:18px">${homework[s]?'✅':'⚠️'}</span>
-      <span class="chip-name">${s}</span>
-    </div>`).join('');
-}
-window.toggleH = function(s) { homework[s]=!homework[s]; renderHomework(); };
-
-function renderRatingGrid() {
-  const el = document.getElementById('ratingGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map(s => {
-    const r = classRating[s] || 0;
-    return `<div class="rating-row">
-      <span class="rating-name">${s}</span>
-      <div class="rating-stars">
-        ${[1,2,3,4,5].map(i=>`<button class="star-btn ${i<=r?'active':''}" onclick="setRating('${s}',${i})" title="${RATING_LABELS[i]}">⭐</button>`).join('')}
+function renderExams() {
+  const container=document.getElementById('examsContainer');
+  if(!container)return;
+  container.innerHTML=exams.map((ex,ei)=>{
+    const isGrade=ex.mode==='grade';
+    const rows=currentStudents.map((s,si)=>{
+      const val=ex.scores[s]||'';
+      const input=isGrade
+        ? `<select id="ex_${ex.id}_${si}" style="width:90px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;color:var(--text);font-family:inherit;font-size:14px;cursor:pointer;outline:none" onchange="updateExamScore(${ex.id},${si})"><option value="">—</option>${GRADES.map(g=>`<option value="${g}"${g===val?' selected':''}>${g}</option>`).join('')}</select>`
+        : `<input type="number" id="ex_${ex.id}_${si}" value="${val}" placeholder="—" min="0" style="width:72px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;color:var(--text);font-family:inherit;font-size:14px;text-align:center;outline:none" oninput="updateExamScore(${ex.id},${si})">`;
+      const d=getExamDisplay(val,ex.mode,ex.maxScore);
+      return `<tr><td style="font-weight:700;padding:8px 10px;border:1px solid var(--border)">${s}</td><td style="padding:6px 10px;border:1px solid var(--border)">${input}</td><td id="ex_disp_${ex.id}_${si}" style="padding:8px 10px;border:1px solid var(--border);font-size:12px;font-weight:700;color:${d.color}">${d.text}</td></tr>`;
+    }).join('');
+    return `<div class="exam-block">
+      <div class="exam-header">
+        <span class="exam-label">📋 考試 ${ei+1}</span>
+        <input value="${ex.range||''}" placeholder="考試範圍（例：Unit 3 單字）"
+          style="flex:1;min-width:140px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none"
+          oninput="exams.find(e=>e.id===${ex.id}).range=this.value">
+        <div style="display:flex;gap:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:2px">
+          <button onclick="toggleExamMode(${ex.id},'score')" style="${!isGrade?'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🔢 分數</button>
+          <button onclick="toggleExamMode(${ex.id},'grade')" style="${isGrade?'background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🅰 等第</button>
+        </div>
+        ${!isGrade?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:11px;color:var(--muted)">滿分</span><input type="number" value="${ex.maxScore}" min="1" max="9999" style="width:58px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 6px;color:var(--text);font-family:inherit;font-size:13px;text-align:center;outline:none" oninput="exams.find(e=>e.id===${ex.id}).maxScore=parseFloat(this.value)||100;renderExams()"><span style="font-size:11px;color:var(--muted)">分</span></div>`:''}
+        ${exams.length>1?`<button onclick="removeExam(${ex.id})" style="background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:5px 10px;color:var(--red);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">✕</button>`:''}
       </div>
-      <span class="rating-label" style="color:${r?RATING_COLORS[r]:'var(--muted)'}">${r?r+'分':'-'}</span>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:rgba(255,255,255,.05)">
+          <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
+          <th style="padding:8px;border:1px solid var(--border)">${isGrade?'等第':`成績（/${ex.maxScore}）`}</th>
+          <th style="padding:8px;border:1px solid var(--border)">結果</th>
+        </tr></thead><tbody>${rows}</tbody>
+      </table>
     </div>`;
   }).join('');
 }
-window.setRating = function(s, val) {
-  classRating[s] = classRating[s] === val ? 0 : val;
-  renderRatingGrid();
+
+window.updateExamScore = function(examId, si) {
+  const ex=exams.find(e=>e.id===examId);
+  const el=document.getElementById(`ex_${examId}_${si}`);
+  const out=document.getElementById(`ex_disp_${examId}_${si}`);
+  if(!ex||!el||!out)return;
+  const val=el.value;
+  ex.scores[currentStudents[si]]=val;
+  const d=getExamDisplay(val,ex.mode,ex.maxScore);
+  out.textContent=d.text; out.style.color=d.color;
 };
 
-function renderScoreTable() {
-  document.getElementById('scoreBody').innerHTML = currentStudents.map((s,i) => {
-    const input = scoreMode === 'grade'
-      ? `<select class="score-input" id="sc_${i}" style="width:90px;cursor:pointer;background:var(--surface3)" onchange="updateScoreDisplay(${i})">
-           <option value="">—</option>
-           ${GRADES.map(g=>`<option value="${g}">${g}</option>`).join('')}
-         </select>`
-      : `<input type="number" class="score-input" id="sc_${i}" placeholder="—" min="0" oninput="updateScoreDisplay(${i})">`;
-    return `<tr>
-      <td style="font-weight:700;padding:8px 10px;border:1px solid var(--border)">${s}</td>
-      <td style="padding:6px 10px;border:1px solid var(--border)">${input}</td>
-      <td id="pct_${i}" style="padding:8px 10px;border:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:700">—</td>
-    </tr>`;
+function renderExamRows(examList, sts) {
+  return (examList||[]).map((ex,ei) => {
+    const scored = sts.filter(s => ex.scores?.[s]!==''&&ex.scores?.[s]!=null);
+    if (!scored.length) return '';
+    const label = ex.range||('考試'+(ei+1));
+    const tags  = scored.map(s => {
+      const v       = ex.scores[s];
+      const isGrade = GRADES.includes(String(v));
+      if (isGrade) {
+        const col = GRADE_COLORS[v]||'var(--text)';
+        return '<span class="tag" style="background:rgba(255,255,255,.07);color:'+col+'">'+s+'：'+v+'</span>';
+      }
+      const pct = Math.round(parseFloat(v)/(ex.maxScore||100)*100);
+      const tc  = pct>=90?'tag-green':pct>=60?'tag-yellow':'tag-red';
+      return '<span class="tag '+tc+'">'+s+'：'+v+'/'+(ex.maxScore||100)+'（'+pct+'%）</span>';
+    }).join('');
+    return '<div class="detail-row"><div class="detail-label">'+label+'</div><div class="detail-value">'+tags+'</div></div>';
   }).join('');
 }
-window.updateScorePct = window.updateScoreDisplay = function(i) {
-  const el  = document.getElementById('sc_'+i);
-  const out = document.getElementById('pct_'+i);
-  if (!el || !out) return;
-  const val = el.value;
-  if (!val) { out.textContent='—'; out.style.color='var(--muted)'; return; }
-  if (scoreMode === 'grade') {
-    out.textContent = val;
-    out.style.color = GRADE_COLORS[val] || 'var(--text)';
-  } else {
-    const max = parseFloat(document.getElementById('maxScore').value)||100;
-    const pct = Math.round(parseFloat(val)/max*100);
-    if (isNaN(pct)) { out.textContent='—'; out.style.color='var(--muted)'; return; }
-    out.textContent = pct+'%';
-    out.style.color = pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
-  }
-};
-function getScores() {
-  const o = {};
-  currentStudents.forEach((s,i) => { const v=document.getElementById('sc_'+i)?.value; o[s]=v===''||v==null?'':v; });
-  return o;
-}
-function setScores(sc, max, mode) {
-  if (mode) { scoreMode=mode; updateScoreModeUI(); }
-  else if (max) { document.getElementById('maxScore').value=max; updateScoreHeader(); }
-  renderScoreTable();
-  currentStudents.forEach((s,i) => {
-    const el = document.getElementById('sc_'+i);
-    if (el && sc[s]!=null && sc[s]!=='') { el.value=sc[s]; updateScoreDisplay(i); }
-  });
+
+function getExamDisplay(val, mode, maxScore) {
+  if (!val) return {text:'—', color:'var(--muted)'};
+  if (mode==='grade') return {text:val, color:GRADE_COLORS[val]||'var(--text)'};
+  const pct = Math.round(parseFloat(val)/(maxScore||100)*100);
+  if (isNaN(pct)) return {text:'—', color:'var(--muted)'};
+  return {text:pct+'%', color:pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)'};
 }
 
-// ── PHOTO ──
-window.handleDragOver = e => { e.preventDefault(); document.getElementById('uploadZone').classList.add('dragover'); };
-window.handleDragLeave = () => document.getElementById('uploadZone').classList.remove('dragover');
-window.handleDrop = e => { e.preventDefault(); document.getElementById('uploadZone').classList.remove('dragover'); const f=e.dataTransfer.files[0]; if(f) handlePhoto(f); };
-
-window.handlePhoto = async function(file) {
-  if (!file) return;
-  const apiKey = document.getElementById('apiKey').value.trim();
-  if (!apiKey) { showToast('請先填入 OpenAI API Key','error'); return; }
-  const clsId = document.getElementById('journalClassSelect').value;
-  const cls   = myClasses.find(c => c._id === clsId);
-  if (!cls) { showToast('請先選擇班級','error'); return; }
-
-  const url = URL.createObjectURL(file);
-  document.getElementById('uploadContent').innerHTML = `<img src="${url}" style="height:55px;border-radius:8px;object-fit:cover"><div style="color:var(--teal);font-weight:700;font-size:13px;margin-top:6px">已上傳，點擊更換</div>`;
-  showLoading('GPT-4o 辨識中...');
-  try {
-    const b64 = await toBase64(file);
-    const prompt = `你是教室日誌辨識助手。本班學生：${cls.students.join('、')}
-出勤：present=出勤、late=遲到、sick=病假、leave=事假、absent=曠課
-回傳純JSON（不加markdown）：
-{"date":"MM/DD","weekday":"一二三四五六日","attendance":{"姓名":"present|late|sick|leave|absent"},"homeworkNotDone":["未繳作業學生"],"scores":{"姓名":數字或null},"maxScore":滿分,"todayProgress":"進度","todayHomework":"作業","nextExam":"下次考試","notes":"備註"}`;
-
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':`Bearer ${apiKey}`},
-      body:JSON.stringify({model:'gpt-4o',max_tokens:1500,messages:[{role:'user',content:[
-        {type:'image_url',image_url:{url:`data:${file.type||'image/jpeg'};base64,${b64}`,detail:'high'}},
-        {type:'text',text:prompt}
-      ]}]})
-    });
-    const data = await res.json();
-    if (data.error) throw new Error(data.error.message);
-    const parsed = JSON.parse((data.choices?.[0]?.message?.content||'').replace(/```json|```/g,'').trim());
-
-    cls.students.forEach(s => {
-      attendance[s] = normAtt(parsed.attendance?.[s]);
-      homework[s]   = !(parsed.homeworkNotDone||[]).includes(s);
-    });
-    renderAttendance(); renderHomework(); renderRatingGrid(); renderScoreTable();
-    setScores(parsed.scores||{}, parsed.maxScore, parsed.scoreMode||'score');
-    document.getElementById('fDate').value    = parsed.date||'';
-    document.getElementById('fWeekday').value = parsed.weekday||'';
-    document.getElementById('fProgress').value = parsed.todayProgress||'';
-    document.getElementById('fHomework').value = parsed.todayHomework||'';
-    document.getElementById('fNextExam').value = parsed.nextExam||'';
-    document.getElementById('fNotes').value    = parsed.notes||'';
-    showToast('✅ 辨識完成，請確認後儲存');
-  } catch(e) { showToast('❌ '+(e.message||'辨識失敗'),'error'); }
-  hideLoading();
-};
-function toBase64(f) {
-  return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(f);});
-}
+// legacy stubs
+function getScores(){return {};}
+function setScores(){}
+window.updateScoreHeader=function(){};
+window.toggleScoreMode=function(){};
+function updateScoreModeUI(){}
+window.updateScorePct=window.updateScoreDisplay=function(){};
 
 // ── SAVE ENTRY ──
 window.saveEntry = async function() {
@@ -906,7 +818,7 @@ window.saveEntry = async function() {
     date, weekday:document.getElementById('fWeekday').value,
     students:[...currentStudents],
     attendance:{...attendance}, homework:{...homework},
-    scores:getScores(), maxScore, scoreMode, classRating:{...classRating},
+    exams:exams.map(ex=>({...ex, scores:{...ex.scores}})), classRating:{...classRating},
     todayProgress:document.getElementById('fProgress').value,
     todayHomework:document.getElementById('fHomework').value,
     nextExam:document.getElementById('fNextExam').value,
@@ -943,14 +855,14 @@ function renderHistory() {
   el.innerHTML = entries.map((e,i) => {
     const sts = e.students||[];
     const attMap = e.attendance||{};
-    const hwMiss = sts.filter(s => e.homework[s]===false);
+    const hwMiss    = sts.filter(s => hwVal(e.homework?.[s])!=='good');
     const absentCount = sts.filter(s => normAtt(attMap[s])==='absent').length;
     const lateCount   = sts.filter(s => attMap[s]==='late').length;
-    const hasScores   = sts.some(s => e.scores?.[s]!==''&&e.scores?.[s]!=null);
+    const entryExams  = e.exams||[];
+    const hasScores   = entryExams.some(ex=>sts.some(s=>ex.scores?.[s]!==''&&ex.scores?.[s]!=null));
     const ratingMap   = e.classRating||{};
     const ratedStudents = sts.filter(s => ratingMap[s]>0);
     const avgRating   = ratedStudents.length ? (ratedStudents.reduce((a,s)=>a+(ratingMap[s]||0),0)/ratedStudents.length).toFixed(1) : null;
-    const max = e.maxScore||100;
     return `<div class="entry-card">
       <div class="entry-header" onclick="toggleE(${i})">
         <div>
@@ -961,17 +873,17 @@ function renderHistory() {
         <div class="entry-badges">
           ${absentCount?`<span class="ebadge ebadge-red">曠課${absentCount}</span>`:''}
           ${lateCount?`<span class="ebadge ebadge-orange">遲到${lateCount}</span>`:''}
-          ${hwMiss.length?`<span class="ebadge ebadge-yellow">未繳${hwMiss.length}</span>`:''}
-          ${hasScores?`<span class="ebadge ebadge-teal">有成績</span>`:''}
+          ${hwMiss.length?`<span class="ebadge ebadge-yellow">作業${hwMiss.length}人</span>`:''}
+          ${hasScores?`<span class="ebadge ebadge-teal">考試${entryExams.filter(ex=>sts.some(s=>ex.scores?.[s])).length}次</span>`:''}
           ${avgRating?`<span class="ebadge" style="background:rgba(255,209,102,.2);color:var(--yellow)">⭐${avgRating}</span>`:''}
           <span class="chevron" id="chev-${i}">▼</span>
         </div>
       </div>
       <div class="entry-body" id="body-${i}">
         <div class="detail-row"><div class="detail-label">出勤</div><div class="detail-value">${sts.map(s=>`<span class="tag ${ATT_TAG[normAtt(attMap[s])]}">${s}：${ATT_LABELS[normAtt(attMap[s])]}</span>`).join('')}</div></div>
-        <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted)">全部繳交 ✅</span>'}</div></div>
+        <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${sts.map(s=>{const hw=hwVal(e.homework?.[s]);const cls=hw==='good'?'tag-green':hw==='partial'?'tag-yellow':'tag-red';return `<span class="tag ${cls}">${s}：${HW_LABELS[hw]}</span>`;}).join('')}</div></div>
         ${ratedStudents.length?`<div class="detail-row"><div class="detail-label">上課評分</div><div class="detail-value">${ratedStudents.map(s=>{const r=ratingMap[s];return `<span class="tag" style="background:rgba(255,255,255,.07);color:${RATING_COLORS[r]}">${s}：${'⭐'.repeat(r)}（${r}分）</span>`;}).join('')}</div></div>`:''}
-        ${hasScores?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null).map(s=>{const isGrade=GRADES.includes(String(e.scores[s]));if(isGrade){const col=GRADE_COLORS[e.scores[s]]||'var(--text)';return `<span class="tag" style="background:rgba(255,255,255,.07);color:${col}">${s}：${e.scores[s]}</span>`;}const pct=Math.round(e.scores[s]/max*100);const tc=pct>=90?'tag-green':pct>=60?'tag-yellow':'tag-red';return `<span class="tag ${tc}">${s}：${e.scores[s]}/${max}（${pct}%）</span>`;}).join('')}</div></div>`:''}
+        ${hasScores?renderExamRows(entryExams,sts):''}
         ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value">${e.todayProgress}</div></div>`:''}
         ${e.todayHomework?`<div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${e.todayHomework}</div></div>`:''}
         ${e.nextExam?`<div class="detail-row"><div class="detail-label">考試</div><div class="detail-value" style="color:var(--red);font-weight:700">${e.nextExam}</div></div>`:''}
@@ -1000,8 +912,10 @@ window.editEntry = function(i) {
     document.getElementById('selectedClassInfo').style.display = 'block';
     document.getElementById('selectedClassInfo').textContent = `班級：${cls.name}　學生：${cls.students.join('、')}`;
     document.getElementById('journalForm').style.display = 'block';
-    renderAttendance(); renderHomework(); renderRatingGrid(); renderScoreTable();
-    setScores(e.scores||{}, e.maxScore, e.scoreMode||'score');
+    renderAttendance(); renderHomework(); renderRatingGrid();
+    exams=(e.exams||[{id:0,range:'',mode:'score',maxScore:e.maxScore||100,scores:e.scores||{}}]).map((ex,i)=>({...ex,id:i}));
+    examIdCounter=exams.length;
+    renderExams();
   }
   document.getElementById('fDate').value     = e.date||'';
   document.getElementById('fWeekday').value  = e.weekday||'';
@@ -1340,7 +1254,7 @@ function adminEntryCard(e, prefix) {
       <div><span class="entry-date">${e.date}</span><span class="entry-teacher">${e.teacherName||''}</span><span style="font-size:12px;color:var(--purple);margin-left:6px">${e.className||''}</span></div>
       <div class="entry-badges">
         ${absent.length?`<span class="ebadge ebadge-red">缺${absent.length}</span>`:''}
-        ${hwMiss.length?`<span class="ebadge ebadge-yellow">未繳${hwMiss.length}</span>`:''}
+        ${hwMiss.length?`<span class="ebadge ebadge-yellow">作業${hwMiss.length}人</span>`:''}
         <span class="chevron" id="chev-${prefix}">▼</span>
       </div>
     </div>
