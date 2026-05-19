@@ -1193,7 +1193,7 @@ window.printReport = function(outputId='reportOutput') {
 
 // ── ADMIN ──
 window.adminSwitchTab = function(name, el) {
-  ['overview','entries','stats','student','schedule','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
+  ['overview','entries','stats','student','schedule','classreport','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
   document.querySelectorAll('#adminPage .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('admin-tab-'+name).style.display='block';
   el.classList.add('active');
@@ -1202,6 +1202,7 @@ window.adminSwitchTab = function(name, el) {
   if (name==='accounts') renderTeachers();
   if (name==='student') renderAdminStudentPick();
   if (name==='schedule') { renderScheduleEditor(); renderScheduleStatusBanner(); }
+  if (name==='classreport') populateClassReportSelect();
 };
 
 async function adminLoadAll() {
@@ -1241,6 +1242,12 @@ function adminPopulateFilters() {
   document.getElementById('filterDate').innerHTML    = '<option value="">所有日期</option>'+dates.map(d=>`<option>${d}</option>`).join('');
 }
 
+function populateClassReportSelect() {
+  const classes = [...new Set(allEntries.map(e=>e.className).filter(Boolean))].sort();
+  const sel = document.getElementById('classReportSelect');
+  if (sel) sel.innerHTML = '<option value="">-- 請選擇班級 --</option>'+classes.map(c=>`<option value="${c}">${c}</option>`).join('');
+}
+
 window.adminRenderEntries = function() {
   const teacher = document.getElementById('filterTeacher').value;
   const cls     = document.getElementById('filterClass').value;
@@ -1255,9 +1262,9 @@ window.adminRenderEntries = function() {
 function adminEntryCard(e, prefix) {
   const sts    = e.students||[];
   const absent = sts.filter(s=>normAtt(e.attendance?.[s])!=='present');
-  const hwMiss = sts.filter(s=>e.homework?.[s]===false);
-  const hasSc  = sts.some(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null);
-  const max    = e.maxScore||100;
+  const hwMiss = sts.filter(s=>hwVal(e.homework?.[s])!=='good');
+  const entryExams = e.exams||[];
+  const hasSc  = entryExams.some(ex=>sts.some(s=>ex.scores?.[s]!==''&&ex.scores?.[s]!=null));
   return `<div class="entry-card">
     <div class="entry-header" onclick="adminToggle('${prefix}')">
       <div><span class="entry-date">${e.date}</span><span class="entry-teacher">${e.teacherName||''}</span><span style="font-size:12px;color:var(--purple);margin-left:6px">${e.className||''}</span></div>
@@ -1269,10 +1276,15 @@ function adminEntryCard(e, prefix) {
     </div>
     <div class="entry-body" id="body-${prefix}">
       <div class="detail-row"><div class="detail-label">出勤</div><div class="detail-value">${sts.map(s=>`<span class="tag ${ATT_TAG[normAtt(e.attendance?.[s])]}">${s}：${ATT_LABELS[normAtt(e.attendance?.[s])]}</span>`).join('')}</div></div>
-      <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${hwMiss.length?hwMiss.map(s=>`<span class="tag tag-yellow">${s} ⚠️</span>`).join(''):'<span style="color:var(--muted)">全部繳交 ✅</span>'}</div></div>
-      ${hasSc?`<div class="detail-row"><div class="detail-label">成績</div><div class="detail-value">${sts.filter(s=>e.scores?.[s]!==''&&e.scores?.[s]!=null).map(s=>{const pct=Math.round(e.scores[s]/max*100);const tc=pct>=90?'tag-green':pct>=60?'tag-yellow':'tag-red';return`<span class="tag ${tc}">${s}:${e.scores[s]}/${max}(${pct}%)</span>`;}).join('')}</div></div>`:''}
+      <div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${sts.map(s=>{const hw=hwVal(e.homework?.[s]);const cls=hw==='good'?'tag-green':hw==='partial'?'tag-yellow':'tag-red';return `<span class="tag ${cls}">${s}：${HW_LABELS[hw]}</span>`;}).join('')}</div></div>
+      ${hasSc?renderExamRows(entryExams,sts):''}
       ${e.todayProgress?`<div class="detail-row"><div class="detail-label">進度</div><div class="detail-value">${e.todayProgress}</div></div>`:''}
+      ${e.todayHomework?`<div class="detail-row"><div class="detail-label">作業</div><div class="detail-value">${e.todayHomework}</div></div>`:''}
       ${e.nextExam?`<div class="detail-row"><div class="detail-label">考試</div><div class="detail-value" style="color:var(--red);font-weight:700">${e.nextExam}</div></div>`:''}
+      ${e.notes?`<div class="detail-row"><div class="detail-label">備註</div><div class="detail-value" style="color:var(--muted)">${e.notes}</div></div>`:''}
+      <div style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="openAdminEditModal('${e._id}')">✏️ 編輯此日誌</button>
+      </div>
     </div>
   </div>`;
 }
@@ -1551,6 +1563,249 @@ window.checkMissingLogs = function() {
     </div>` : ''}`;
 };
 
+// ── ADMIN EDIT ENTRY ──
+let adminEditingEntry = null;
+
+window.openAdminEditModal = function(entryId) {
+  const entry = allEntries.find(e=>e._id===entryId);
+  if (!entry) return;
+  adminEditingEntry = entry;
+
+  const sts = entry.students||[];
+  const attMap = entry.attendance||{};
+  const hwMap  = entry.homework||{};
+  const ratingMap = entry.classRating||{};
+  const entryExams = entry.exams||[{id:0,range:'',mode:'score',maxScore:100,scores:{}}];
+
+  const modal = document.getElementById('adminEditModal');
+  document.getElementById('adminEditTitle').textContent = `編輯日誌 — ${entry.teacherName} · ${entry.className} · ${entry.date}`;
+
+  // Attendance
+  document.getElementById('adminEditAttendance').innerHTML = sts.map(s=>{
+    const st=normAtt(attMap[s]);
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span style="min-width:60px;font-weight:700;font-size:14px">${s}</span>
+      <select id="adm_att_${s.replace(/\s/g,'_')}" style="background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none;cursor:pointer">
+        ${ATT_STATES.map(a=>`<option value="${a}"${a===st?' selected':''}>${ATT_LABELS[a]}</option>`).join('')}
+      </select>
+    </div>`;
+  }).join('');
+
+  // Homework
+  document.getElementById('adminEditHomework').innerHTML = sts.map(s=>{
+    const hw=hwVal(hwMap[s]);
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span style="min-width:60px;font-weight:700;font-size:14px">${s}</span>
+      <select id="adm_hw_${s.replace(/\s/g,'_')}" style="background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none;cursor:pointer">
+        ${HW_STATES.map(h=>`<option value="${h}"${h===hw?' selected':''}>${HW_LABELS[h]}</option>`).join('')}
+      </select>
+    </div>`;
+  }).join('');
+
+  // Rating
+  document.getElementById('adminEditRating').innerHTML = sts.map(s=>{
+    const r=ratingMap[s]||0;
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span style="min-width:60px;font-weight:700;font-size:14px">${s}</span>
+      <select id="adm_rat_${s.replace(/\s/g,'_')}" style="background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none;cursor:pointer">
+        <option value="0"${r===0?' selected':''}>未評分</option>
+        ${[1,2,3,4,5].map(i=>`<option value="${i}"${r===i?' selected':''}>${'⭐'.repeat(i)} ${i}分</option>`).join('')}
+      </select>
+    </div>`;
+  }).join('');
+
+  // Exams
+  document.getElementById('adminEditExams').innerHTML = entryExams.map((ex,ei)=>{
+    const isGrade=ex.mode==='grade';
+    return `<div style="background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <span style="font-size:13px;font-weight:700;color:var(--teal)">考試 ${ei+1}</span>
+        <input value="${ex.range||''}" placeholder="考試範圍"
+          id="adm_ex_range_${ei}"
+          style="flex:1;min-width:120px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none">
+        <span style="font-size:12px;color:var(--muted)">模式：${isGrade?'等第':'分數'}　滿分：${ex.maxScore||100}</span>
+      </div>
+      ${sts.map(s=>{
+        const val=ex.scores?.[s]||'';
+        const input=isGrade
+          ? `<select id="adm_sc_${ei}_${s.replace(/\s/g,'_')}" style="width:90px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;color:var(--text);font-family:inherit;font-size:13px;cursor:pointer;outline:none"><option value="">—</option>${GRADES.map(g=>`<option value="${g}"${g===val?' selected':''}>${g}</option>`).join('')}</select>`
+          : `<input type="number" id="adm_sc_${ei}_${s.replace(/\s/g,'_')}" value="${val}" placeholder="—" min="0" style="width:72px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;color:var(--text);font-family:inherit;font-size:14px;text-align:center;outline:none">`;
+        return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="min-width:60px;font-weight:700;font-size:14px">${s}</span>${input}</div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
+
+  // Course info
+  document.getElementById('adminEditProgress').value = entry.todayProgress||'';
+  document.getElementById('adminEditHomeworkNote').value = entry.todayHomework||'';
+  document.getElementById('adminEditNextExam').value = entry.nextExam||'';
+  document.getElementById('adminEditNotes').value = entry.notes||'';
+  document.getElementById('adminEditDate').value = entry.date||'';
+  document.getElementById('adminEditWeekday').value = entry.weekday||'';
+
+  modal.classList.add('show');
+};
+
+window.closeAdminEditModal = function() {
+  document.getElementById('adminEditModal').classList.remove('show');
+  adminEditingEntry = null;
+};
+
+window.saveAdminEdit = async function() {
+  if (!adminEditingEntry) return;
+  const entry = adminEditingEntry;
+  const sts   = entry.students||[];
+  const entryExams = entry.exams||[];
+
+  // Collect attendance
+  const newAtt = {};
+  sts.forEach(s=>{
+    const el=document.getElementById('adm_att_'+s.replace(/\s/g,'_'));
+    newAtt[s]=el?el.value:'present';
+  });
+  // Collect homework
+  const newHw = {};
+  sts.forEach(s=>{
+    const el=document.getElementById('adm_hw_'+s.replace(/\s/g,'_'));
+    newHw[s]=el?el.value:'good';
+  });
+  // Collect rating
+  const newRating = {};
+  sts.forEach(s=>{
+    const el=document.getElementById('adm_rat_'+s.replace(/\s/g,'_'));
+    newRating[s]=el?parseInt(el.value)||0:0;
+  });
+  // Collect exams
+  const newExams = entryExams.map((ex,ei)=>{
+    const newScores={};
+    sts.forEach(s=>{
+      const el=document.getElementById(`adm_sc_${ei}_${s.replace(/\s/g,'_')}`);
+      newScores[s]=el?el.value:'';
+    });
+    const rangeEl=document.getElementById(`adm_ex_range_${ei}`);
+    return {...ex, range:rangeEl?rangeEl.value:ex.range, scores:newScores};
+  });
+
+  const updated = {
+    ...entry,
+    date: document.getElementById('adminEditDate').value||entry.date,
+    weekday: document.getElementById('adminEditWeekday').value||entry.weekday,
+    attendance: newAtt, homework: newHw, classRating: newRating, exams: newExams,
+    todayProgress: document.getElementById('adminEditProgress').value,
+    todayHomework: document.getElementById('adminEditHomeworkNote').value,
+    nextExam: document.getElementById('adminEditNextExam').value,
+    notes: document.getElementById('adminEditNotes').value,
+    editedByAdmin: true, editedAt: Date.now()
+  };
+  delete updated._id;
+
+  showLoading('儲存中...');
+  try {
+    await updateDoc(doc(db,'entries',entry._id), updated);
+    showToast('✅ 日誌已更新');
+    closeAdminEditModal();
+    await adminLoadAll();
+    adminRenderEntries();
+  } catch(e) { showToast('❌ 儲存失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+// ── ADMIN CLASS REPORT ──
+window.generateClassReport = function() {
+  const classId = document.getElementById('classReportSelect').value;
+  const startStr = document.getElementById('classReportStart').value;
+  const endStr   = document.getElementById('classReportEnd').value;
+  if (!classId) { showToast('請選擇班級','error'); return; }
+
+  const startMMDD = parseMMDD(startStr);
+  const endMMDD   = parseMMDD(endStr);
+
+  const classEntries = allEntries.filter(e=>{
+    if (e.className !== classId) return false;
+    if (!startMMDD||!endMMDD) return true;
+    const d=entryDateToMMDD(e.date);
+    return d&&d>=startMMDD&&d<=endMMDD;
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+
+  const outEl = document.getElementById('classReportOutput');
+  if (!classEntries.length) {
+    outEl.innerHTML='<div style="color:var(--muted);padding:20px;text-align:center">此範圍內無資料</div>';
+    return;
+  }
+
+  const dates   = classEntries.map(e=>e.date);
+  const allStus = [...new Set(classEntries.flatMap(e=>e.students||[]))];
+  const className = classEntries[0].className||classId;
+  const teacherName = classEntries[0].teacherName||'';
+
+  let html = `<div style="font-size:16px;font-weight:900;color:var(--purple);margin-bottom:4px">🏫 ${className}</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:16px">授課老師：${teacherName}　共 ${classEntries.length} 筆記錄　${startStr||''}${startStr&&endStr?' ～ ':''}${endStr||''}</div>`;
+
+  // Attendance table
+  html += buildAttTable(classEntries, dates, allStus);
+  // Homework table
+  html += buildHwTable(classEntries, dates, allStus);
+  // Score tables (one per exam slot across entries)
+  const allExamSlots = Math.max(...classEntries.map(e=>(e.exams||[]).length), 0);
+  for (let ei=0; ei<allExamSlots; ei++) {
+    const scoreEntries = classEntries.filter(e=>(e.exams||[])[ei]);
+    if (scoreEntries.length) {
+      const label = scoreEntries[0].exams[ei].range || `考試${ei+1}`;
+      html += adminBuildScoreTable(scoreEntries, allStus, ei, label);
+    }
+  }
+  // Rating table
+  html += buildRatingTable(classEntries, dates, allStus);
+
+  document.getElementById('adminPrintArea').innerHTML=`<div style="font-family:'Noto Sans TC',sans-serif;padding:20px;color:#000;background:#fff"><h2>百宏文教機構 · 班級報表</h2>${html}</div>`;
+  outEl.innerHTML = html;
+  showToast('✅ 班級報表已產生');
+};
+
+function buildRatingTable(es, dates, students) {
+  if (!es.some(e=>students.some(s=>(e.classRating||{})[s]>0))) return '';
+  let t=`<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:var(--teal);margin-bottom:10px">⭐ 上課評分</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:rgba(255,255,255,.06)">
+      <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
+      ${dates.map(d=>`<th style="padding:8px 6px;border:1px solid var(--border);min-width:52px;text-align:center">${d}</th>`).join('')}
+      <th style="padding:8px;border:1px solid var(--border);text-align:center">平均</th>
+    </tr></thead><tbody>`;
+  students.forEach(s=>{
+    const vals=es.map(e=>(e.classRating||{})[s]||0);
+    const rated=vals.filter(v=>v>0);
+    const avg=rated.length?(rated.reduce((a,b)=>a+b,0)/rated.length).toFixed(1):null;
+    t+=`<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
+      ${vals.map(v=>`<td style="padding:6px;border:1px solid var(--border);text-align:center;color:${v?RATING_COLORS[v]:'var(--muted)'}">${v?'⭐'.repeat(v):'-'}</td>`).join('')}
+      <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${avg?RATING_COLORS[Math.round(parseFloat(avg))]:'var(--muted)'}">${avg?avg+'分':'-'}</td>
+    </tr>`;
+  });
+  return t+`</tbody></table></div></div>`;
+}
+
+function adminBuildScoreTable(scoreEntries, students, examIdx, label) {
+  let t=`<div style="margin-bottom:20px"><div style="font-size:14px;font-weight:700;color:var(--teal);margin-bottom:10px">🏆 ${label}</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:rgba(255,255,255,.06)">
+      <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
+      ${scoreEntries.map(e=>{const ex=(e.exams||[])[examIdx];return `<th style="padding:8px 6px;border:1px solid var(--border);min-width:70px;text-align:center">${e.date}<br><span style="font-size:10px;color:var(--muted)">${ex?.mode==='grade'?'等第':'滿分'+(ex?.maxScore||100)}</span></th>`;}).join('')}
+      <th style="padding:8px;border:1px solid var(--border);text-align:center">平均%</th>
+    </tr></thead><tbody>`;
+  students.forEach(s=>{
+    const pcts=scoreEntries.map(e=>{const ex=(e.exams||[])[examIdx];const v=ex?.scores?.[s];if(!v)return null;if(GRADES.includes(String(v)))return null;return Math.round(parseFloat(v)/(ex.maxScore||100)*100);}).filter(p=>p!==null);
+    const avg=pcts.length?Math.round(pcts.reduce((a,b)=>a+b,0)/pcts.length):null;
+    t+=`<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
+      ${scoreEntries.map(e=>{const ex=(e.exams||[])[examIdx];const v=ex?.scores?.[s];const has=v!==''&&v!=null;const isGrade=has&&GRADES.includes(String(v));if(isGrade){return `<td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${GRADE_COLORS[v]||'var(--text)'}">${v}</td>`;}const pct=has?Math.round(parseFloat(v)/(ex.maxScore||100)*100):null;const bg=!has?'':pct>=90?'rgba(86,204,178,.25)':pct>=60?'rgba(255,209,102,.2)':'rgba(255,107,107,.25)';const tc=!has?'var(--muted)':pct>=90?'#56ccb2':pct>=60?'#ffd166':'#ff6b6b';return `<td style="padding:8px;border:1px solid var(--border);text-align:center;background:${bg};color:${tc};font-weight:700">${has?`${v}<br><span style="font-size:10px">${pct}%</span>`:'—'}</td>`;}).join('')}
+      <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:900;color:${avg===null?'var(--muted)':avg>=90?'#56ccb2':avg>=60?'#ffd166':'#ff6b6b'}">${avg!==null?avg+'%':'—'}</td>
+    </tr>`;
+  });
+  return t+`</tbody></table></div></div>`;
+}
+
+window.adminPrintClassReport = function() {
+  const pa=document.getElementById('adminPrintArea');
+  if(!pa.innerHTML){showToast('請先產生報表','error');return;}
+  pa.style.display='block'; window.print(); setTimeout(()=>pa.style.display='none',1000);
+};
+
 // ── ADMIN ACCOUNTS ──
 function renderTeachers() {
   document.getElementById('teacherCount').textContent = teachers.length;
@@ -1627,6 +1882,51 @@ window.confirmDelete= async function() {
   </div>
 </div>
 
+<!-- Admin Edit Entry Modal -->
+<div class="modal-overlay" id="adminEditModal" style="align-items:flex-start;padding:16px;overflow-y:auto;">
+  <div class="modal" style="max-width:600px;margin:auto;">
+    <div class="modal-title" id="adminEditTitle" style="font-size:15px;">編輯日誌</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:16px">主管編輯模式 — 修改後點儲存覆蓋原始記錄</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+      <div>
+        <label class="field-label">日期</label>
+        <input class="field-input" id="adminEditDate" placeholder="05/13" style="margin-bottom:0">
+      </div>
+      <div>
+        <label class="field-label">星期</label>
+        <select class="select-input" id="adminEditWeekday">
+          <option value="">選擇</option>
+          <option>一</option><option>二</option><option>三</option><option>四</option><option>五</option><option>六</option><option>日</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="font-size:12px;font-weight:700;color:var(--teal);margin-bottom:8px;letter-spacing:1px;text-transform:uppercase;">👥 出勤狀況</div>
+    <div id="adminEditAttendance" style="margin-bottom:14px;"></div>
+
+    <div style="font-size:12px;font-weight:700;color:var(--teal);margin-bottom:8px;letter-spacing:1px;text-transform:uppercase;">📝 作業繳交</div>
+    <div id="adminEditHomework" style="margin-bottom:14px;"></div>
+
+    <div style="font-size:12px;font-weight:700;color:var(--teal);margin-bottom:8px;letter-spacing:1px;text-transform:uppercase;">⭐ 上課評分</div>
+    <div id="adminEditRating" style="margin-bottom:14px;"></div>
+
+    <div style="font-size:12px;font-weight:700;color:var(--teal);margin-bottom:8px;letter-spacing:1px;text-transform:uppercase;">🏆 考試成績</div>
+    <div id="adminEditExams" style="margin-bottom:14px;"></div>
+
+    <div style="font-size:12px;font-weight:700;color:var(--teal);margin-bottom:8px;letter-spacing:1px;text-transform:uppercase;">📚 課程資訊</div>
+    <div class="field-wrap"><label class="field-label">本日進度</label><input class="field-input" id="adminEditProgress"></div>
+    <div class="field-wrap"><label class="field-label">本日作業</label><input class="field-input" id="adminEditHomeworkNote"></div>
+    <div class="field-wrap"><label class="field-label">下次考試</label><input class="field-input" id="adminEditNextExam"></div>
+    <div class="field-wrap" style="margin-bottom:0"><label class="field-label">備註</label><input class="field-input" id="adminEditNotes"></div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" style="flex:1" onclick="closeAdminEditModal()">取消</button>
+      <button class="btn btn-purple" style="flex:1;padding:10px" onclick="saveAdminEdit()">💾 儲存修改</button>
+    </div>
+  </div>
+</div>
+
 <!-- ADMIN APP PAGE -->
 <div id="adminPage" style="display:none;">
   <div class="header" style="background:linear-gradient(135deg,#1a0a2e,#2d1b4e);border-bottom:1px solid rgba(168,85,247,.2);">
@@ -1647,6 +1947,7 @@ window.confirmDelete= async function() {
       <button class="tab" onclick="adminSwitchTab('stats',this)">📈 老師統計</button>
       <button class="tab" onclick="adminSwitchTab('student',this)">👤 學生查詢</button>
       <button class="tab" onclick="adminSwitchTab('schedule',this)">📅 周課表</button>
+      <button class="tab" onclick="adminSwitchTab('classreport',this)">📊 班級報表</button>
       <button class="tab" onclick="adminSwitchTab('accounts',this)">⚙️ 帳號管理</button>
     </div>
 
@@ -1732,6 +2033,35 @@ window.confirmDelete= async function() {
         </div>
         <div id="missingLogsResult"></div>
       </div>
+    </div>
+
+    <!-- CLASS REPORT -->
+    <div id="admin-tab-classreport" style="display:none;">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px;">
+        <div style="font-size:15px;font-weight:700;margin-bottom:14px;">🏫 班級報表</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+          <div>
+            <label class="field-label">選擇班級</label>
+            <select class="select-input" id="classReportSelect">
+              <option value="">-- 請選擇班級 --</option>
+            </select>
+          </div>
+          <div></div>
+          <div>
+            <label class="field-label">開始日期（選填）</label>
+            <input type="date" class="field-input" id="classReportStart" style="margin-bottom:0">
+          </div>
+          <div>
+            <label class="field-label">結束日期（選填）</label>
+            <input type="date" class="field-input" id="classReportEnd" style="margin-bottom:0">
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-teal" style="flex:1;padding:11px;" onclick="generateClassReport()">📊 產生班級報表</button>
+          <button class="btn btn-ghost" style="padding:11px 18px;" onclick="adminPrintClassReport()">🖨 列印</button>
+        </div>
+      </div>
+      <div id="classReportOutput"></div>
     </div>
 
     <!-- ACCOUNTS -->
