@@ -1197,7 +1197,13 @@ window.adminSwitchTab = function(name, el) {
   document.querySelectorAll('#adminPage .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('admin-tab-'+name).style.display='block';
   el.classList.add('active');
-  if (name==='entries') adminRenderEntries();
+  if (name==='entries') {
+    if (!allEntries.length) {
+      adminLoadAll().then(() => { adminPopulateFilters(); adminRenderEntries(); });
+    } else {
+      adminPopulateFilters(); adminRenderEntries();
+    }
+  }
   if (name==='stats')   adminRenderStats();
   if (name==='accounts') renderTeachers();
   if (name==='student') renderAdminStudentPick();
