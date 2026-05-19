@@ -1619,7 +1619,11 @@ window.openAdminEditModal = function(entryId) {
   const attMap = entry.attendance||{};
   const hwMap  = entry.homework||{};
   const ratingMap = entry.classRating||{};
-  const entryExams = entry.exams||[{id:0,range:'',mode:'score',maxScore:100,scores:{}}];
+  const entryExams = entry.exams?.length
+    ? entry.exams
+    : (Object.keys(entry.scores||{}).some(k=>entry.scores[k]!==''&&entry.scores[k]!=null)
+        ? [{id:0, range:'', mode:'score', maxScore:entry.maxScore||100, scores:{...entry.scores}}]
+        : [{id:0, range:'', mode:'score', maxScore:100, scores:{}}]);
 
   const modal = document.getElementById('adminEditModal');
   document.getElementById('adminEditTitle').textContent = `編輯日誌 — ${entry.teacherName} · ${entry.className} · ${entry.date}`;
@@ -1699,7 +1703,11 @@ window.saveAdminEdit = async function() {
   if (!adminEditingEntry) return;
   const entry = adminEditingEntry;
   const sts   = entry.students||[];
-  const entryExams = entry.exams||[];
+  const entryExams = entry.exams?.length
+    ? entry.exams
+    : (Object.keys(entry.scores||{}).length
+        ? [{id:0, range:'', mode:'score', maxScore:entry.maxScore||100, scores:{...entry.scores}}]
+        : [{id:0, range:'', mode:'score', maxScore:100, scores:{}}]);
 
   // Collect attendance
   const newAtt = {};
