@@ -481,6 +481,17 @@ const GRADE_COLORS = {'A++':'#56ccb2','A+':'#56ccb2','A':'#a8e063','B++':'#ffd16
 const ADMIN_USER = 'admin';
 const ADMIN_PASS = 'admin888';
 
+const HW_STATES  = ['good','partial','missing'];
+const HW_CLASSES = {good:'hw-good', partial:'hw-partial', missing:'hw-missing'};
+const HW_LABELS  = {good:'優良', partial:'部分未完成', missing:'未完成/沒帶'};
+const HW_EMOJI   = {good:'✅', partial:'⚠️', missing:'❌'};
+
+function hwVal(v) {
+  if (v===true  || v==='good')    return 'good';
+  if (v===false || v==='missing') return 'missing';
+  return HW_STATES.includes(v) ? v : 'good';
+}
+
 let scoreMode = 'score'; // kept for compat
 let exams = []; // [{id,range,mode,maxScore,scores:{name:val}}]
 
