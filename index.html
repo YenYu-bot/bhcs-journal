@@ -544,6 +544,7 @@ let currentStudents = [];
 let attendance      = {};
 let homework        = {}; // 'good'|'partial'|'missing'
 let classRating     = {};
+let _lastSelectedClassId = null;
 
 // admin state
 let allEntries      = [];
@@ -641,6 +642,12 @@ function refreshClassSelect() {
   const sel = document.getElementById('journalClassSelect');
   sel.innerHTML = '<option value="">-- 請選擇班級 --</option>' +
     myClasses.map(c => `<option value="${c._id}">${c.name}（${c.students.length}人）</option>`).join('');
+  // If only one class, auto-select it and trigger
+  if (myClasses.length === 1) {
+    sel.value = myClasses[0]._id;
+    _lastSelectedClassId = null;
+    onClassSelect();
+  }
 }
 
 function renderClassList() {
@@ -718,8 +725,6 @@ window.deleteClass = async function(id, name) {
 };
 
 // ── JOURNAL FORM ──
-let _lastSelectedClassId = null;
-
 window.onClassSelect = function() {
   const id  = document.getElementById('journalClassSelect').value;
   if (!id) { document.getElementById('journalForm').style.display='none'; _lastSelectedClassId=null; return; }
