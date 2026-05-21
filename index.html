@@ -1900,7 +1900,12 @@ function renderPromoteClassList() {
             ${isArchived?'<span style="margin-left:8px;font-size:11px;background:rgba(255,255,255,.1);border-radius:10px;padding:2px 8px;color:var(--muted)">已封存</span>':''}
             <div style="font-size:12px;color:var(--muted);margin-top:2px">${(c.students||[]).length}人：${(c.students||[]).slice(0,4).join('、')}${(c.students||[]).length>4?'…':''}</div>
           </div>
-          ${!isArchived ? `<button onclick="openPromotePanel('${c._id}')" style="background:linear-gradient(135deg,var(--teal),#2ecc71);border:none;border-radius:8px;padding:7px 14px;color:#0d1117;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">🎓 升班</button>` : ''}
+          ${!isArchived ? `
+            <button onclick="openPromotePanel('${c._id}')" style="background:linear-gradient(135deg,var(--teal),#2ecc71);border:none;border-radius:8px;padding:7px 14px;color:#0d1117;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">🎓 升班</button>
+            <button onclick="archiveClass('${c._id}','${c.name.replace(/'/g,"\\'")}') " style="background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:7px 12px;color:var(--red);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📦 封存</button>
+          ` : `
+            <button onclick="unarchiveClass('${c._id}','${c.name.replace(/'/g,"\\'")}') " style="background:rgba(255,255,255,.07);border:1px solid var(--border);border-radius:8px;padding:7px 12px;color:var(--muted);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">🔓 解封</button>
+          `}
         </div>`;
       }).join('')}
     </div>`).join('');
@@ -1958,6 +1963,36 @@ window.removePromoteStudent = function(i) {
 window.cancelPromote = function() {
   document.getElementById('promotePanel').style.display='none';
   promoteSource=null;
+};
+
+window.archiveClass = async function(classId, className) {
+  if (!confirm(`確定封存班級「${className}」？\n\n封存後老師無法再填寫新日誌，但所有歷史記錄保留可查閱。\n可隨時解封。`)) return;
+  showLoading('封存中...');
+  try {
+    await updateDoc(doc(db,'classes',classId), {
+      archived: true,
+      archivedAt: Date.now(),
+      archivedNote: '結業封存'
+    });
+    showToast(`📦 「${className}」已封存`);
+    await renderPromoteTab();
+  } catch(e) { showToast('❌ 封存失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+window.unarchiveClass = async function(classId, className) {
+  if (!confirm(`確定解封「${className}」？\n\n解封後老師可以繼續填寫日誌。`)) return;
+  showLoading('解封中...');
+  try {
+    await updateDoc(doc(db,'classes',classId), {
+      archived: false,
+      archivedAt: null,
+      archivedNote: null
+    });
+    showToast(`🔓 「${className}」已解封`);
+    await renderPromoteTab();
+  } catch(e) { showToast('❌ 解封失敗：'+e.message,'error'); }
+  hideLoading();
 };
 
 window.executePromote = async function() {
