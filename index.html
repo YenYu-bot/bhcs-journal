@@ -284,7 +284,7 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
     <div id="tab-journal">
       <div class="card">
         <div class="card-title">① 選擇班級</div>
-        <select class="select-input" id="journalClassSelect" onchange="onClassSelect()">
+        <select class="select-input" id="journalClassSelect" onchange="onClassSelect()" onclick="onClassSelect()">
           <option value="">-- 請選擇班級 --</option>
         </select>
         <div id="selectedClassInfo" style="margin-top:10px;display:none;font-size:13px;color:var(--muted);"></div>
@@ -718,8 +718,13 @@ window.deleteClass = async function(id, name) {
 };
 
 // ── JOURNAL FORM ──
+let _lastSelectedClassId = null;
+
 window.onClassSelect = function() {
   const id  = document.getElementById('journalClassSelect').value;
+  if (!id) { document.getElementById('journalForm').style.display='none'; _lastSelectedClassId=null; return; }
+  if (id === _lastSelectedClassId) return; // already loaded
+  _lastSelectedClassId = id;
   const cls = myClasses.find(c => c._id === id);
   if (!cls) { document.getElementById('journalForm').style.display='none'; return; }
 
@@ -879,6 +884,7 @@ window.saveEntry = async function() {
     else await addDoc(collection(db,'entries'), entry);
     showToast('☁️ 已儲存至雲端！');
     document.getElementById('journalClassSelect').value = '';
+    _lastSelectedClassId = null;
     document.getElementById('journalForm').style.display = 'none';
     document.getElementById('selectedClassInfo').style.display = 'none';
     await loadEntries();
@@ -950,6 +956,7 @@ window.editEntry = function(i) {
   const e   = entries[i];
   const cls = myClasses.find(c => c._id === e.classId);
   document.getElementById('journalClassSelect').value = e.classId||'';
+  _lastSelectedClassId = null; // allow re-render
   if (cls) {
     currentStudents = [...cls.students];
     attendance  = {...(e.attendance||{})};
