@@ -591,7 +591,7 @@ window.login = async function() {
       showPage('teacher');
       document.getElementById('teacherBadge').textContent = t.name;
       const k = localStorage.getItem('openaiKey');
-      if (k && document.getElementById('apiKey')) document.getElementById('apiKey').value = k;
+      if (k) document.getElementById('apiKey').value = k;
       loadClasses();
       loadEntries();
     } else {
@@ -632,7 +632,7 @@ window.switchTab = function(name, el) {
 async function loadClasses() {
   try {
     const snap = await getDocs(query(collection(db,'classes'), where('teacherId','==',currentUser.id)));
-    myClasses = snap.docs.map(d => ({_id:d.id,...d.data()})).sort((a,b) => (a.createdAt||0)-(b.createdAt||0));
+    myClasses = snap.docs.map(d => ({_id:d.id,...d.data()})).filter(c=>!c.archived).sort((a,b) => (a.createdAt||0)-(b.createdAt||0));
     refreshClassSelect();
   } catch(e) { console.error('loadClasses:', e); }
 }
@@ -736,79 +736,16 @@ window.onClassSelect = function() {
   document.getElementById('fDate').value    = `${mm}/${dd}`;
   document.getElementById('fWeekday').value = ['日','一','二','三','四','五','六'][now.getDay()];
   ['fProgress','fHomework','fNextExam','fNotes'].forEach(id => document.getElementById(id).value='');
+  document.getElementById('maxScore').value = '100';
   scoreMode = 'score';
   updateScoreModeUI();
 
   document.getElementById('selectedClassInfo').style.display  = 'block';
   document.getElementById('selectedClassInfo').textContent = `班級：${cls.name}　學生：${cls.students.join('、')}`;
   document.getElementById('journalForm').style.display = 'block';
+  document.getElementById('uploadContent').innerHTML = '<div style="font-size:32px;margin-bottom:6px">📷</div><div style="color:var(--teal);font-weight:700;font-size:14px">點擊或拖曳上傳日誌照片（選用）</div><div style="color:var(--muted);font-size:12px;margin-top:4px">AI 自動識別出缺勤、作業、成績</div>';
 
   renderAttendance(); renderHomework(); renderRatingGrid(); renderExams();
-};
-
-
-// ── RENDER STUDENT INPUT BLOCKS ──
-function renderAttendance() {
-  const el = document.getElementById('attendanceGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map((s, i) => {
-    const st = normAtt(attendance[s]);
-    return `<div class="att-chip ${ATT_CLASSES[st]}" onclick="cycleAttByIndex(${i})">
-      <span style="font-size:18px">${ATT_EMOJI[st]}</span>
-      <span class="chip-name">${s}</span>
-      <span class="att-status">${ATT_LABELS[st]}</span>
-    </div>`;
-  }).join('');
-}
-window.cycleAttByIndex = function(i) {
-  const s = currentStudents[i];
-  if (!s) return;
-  const now = normAtt(attendance[s]);
-  const idx = ATT_STATES.indexOf(now);
-  attendance[s] = ATT_STATES[(idx + 1) % ATT_STATES.length];
-  renderAttendance();
-};
-
-function renderHomework() {
-  const el = document.getElementById('homeworkGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map((s, i) => {
-    const hw = hwVal(homework[s]);
-    return `<div class="hw-chip ${HW_CLASSES[hw]}" onclick="cycleHomeworkByIndex(${i})">
-      <span style="font-size:18px">${HW_EMOJI[hw]}</span>
-      <span class="chip-name">${s}</span>
-      <span class="att-status">${HW_LABELS[hw]}</span>
-    </div>`;
-  }).join('');
-}
-window.cycleHomeworkByIndex = function(i) {
-  const s = currentStudents[i];
-  if (!s) return;
-  const now = hwVal(homework[s]);
-  const idx = HW_STATES.indexOf(now);
-  homework[s] = HW_STATES[(idx + 1) % HW_STATES.length];
-  renderHomework();
-};
-
-function renderRatingGrid() {
-  const el = document.getElementById('ratingGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map((s, i) => {
-    const r = Number(classRating[s] || 0);
-    return `<div class="rating-row">
-      <span class="rating-name">${s}</span>
-      <div class="rating-stars">
-        ${[1,2,3,4,5].map(n => `<button class="star-btn ${n<=r?'active':''}" onclick="setRatingByIndex(${i},${n})" title="${RATING_LABELS[n]}">⭐</button>`).join('')}
-      </div>
-      <span class="rating-label" style="color:${r?RATING_COLORS[r]:'var(--muted)'}">${r?r+'分':'-'}</span>
-    </div>`;
-  }).join('');
-}
-window.setRatingByIndex = function(i, val) {
-  const s = currentStudents[i];
-  if (!s) return;
-  classRating[s] = Number(classRating[s] || 0) === val ? 0 : val;
-  renderRatingGrid();
 };
 
 // ── MULTI-EXAM SYSTEM ──
@@ -826,14 +763,6 @@ window.removeExam = function(id) {
 window.toggleExamMode = function(id, mode) {
   const ex=exams.find(e=>e.id===id);
   if(ex){ex.mode=mode;renderExams();}
-};
-window.updateExamRange = function(id, value) {
-  const ex = exams.find(e => e.id === id);
-  if (ex) ex.range = value;
-};
-window.updateExamMaxScore = function(id, value) {
-  const ex = exams.find(e => e.id === id);
-  if (ex) { ex.maxScore = parseFloat(value) || 100; renderExams(); }
 };
 
 function renderExams() {
@@ -854,12 +783,12 @@ function renderExams() {
         <span class="exam-label">📋 考試 ${ei+1}</span>
         <input value="${ex.range||''}" placeholder="考試範圍（例：Unit 3 單字）"
           style="flex:1;min-width:140px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none"
-          oninput="updateExamRange(${ex.id}, this.value)">
+          oninput="exams.find(e=>e.id===${ex.id}).range=this.value">
         <div style="display:flex;gap:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:2px">
           <button onclick="toggleExamMode(${ex.id},'score')" style="${!isGrade?'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🔢 分數</button>
           <button onclick="toggleExamMode(${ex.id},'grade')" style="${isGrade?'background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🅰 等第</button>
         </div>
-        ${!isGrade?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:11px;color:var(--muted)">滿分</span><input type="number" value="${ex.maxScore}" min="1" max="9999" style="width:58px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 6px;color:var(--text);font-family:inherit;font-size:13px;text-align:center;outline:none" oninput="updateExamMaxScore(${ex.id}, this.value)"><span style="font-size:11px;color:var(--muted)">分</span></div>`:''}
+        ${!isGrade?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:11px;color:var(--muted)">滿分</span><input type="number" value="${ex.maxScore}" min="1" max="9999" style="width:58px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 6px;color:var(--text);font-family:inherit;font-size:13px;text-align:center;outline:none" oninput="exams.find(e=>e.id===${ex.id}).maxScore=parseFloat(this.value)||100;renderExams()"><span style="font-size:11px;color:var(--muted)">分</span></div>`:''}
         ${exams.length>1?`<button onclick="removeExam(${ex.id})" style="background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:5px 10px;color:var(--red);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">✕</button>`:''}
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -928,6 +857,7 @@ window.saveEntry = async function() {
   if (!cls)  { showToast('請選擇班級','error'); return; }
   if (!date) { showToast('請填寫日期','error'); return; }
 
+  const maxScore = parseFloat(document.getElementById('maxScore').value)||100;
   const entry = {
     teacherId:currentUser.id, teacherName:currentUser.name,
     classId:clsId, className:cls.name,
@@ -1305,7 +1235,7 @@ window.printReport = function(outputId='reportOutput') {
 
 // ── ADMIN ──
 window.adminSwitchTab = function(name, el) {
-  ['overview','entries','stats','student','schedule','classreport','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
+  ['overview','entries','stats','student','schedule','classreport','promote','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
   document.querySelectorAll('#adminPage .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('admin-tab-'+name).style.display='block';
   el.classList.add('active');
@@ -1321,6 +1251,7 @@ window.adminSwitchTab = function(name, el) {
   if (name==='student') renderAdminStudentPick();
   if (name==='schedule') { renderScheduleEditor(); renderScheduleStatusBanner(); }
   if (name==='classreport') populateClassReportSelect();
+  if (name==='promote') renderPromoteTab();
 };
 
 async function adminLoadAll() {
@@ -1928,6 +1859,200 @@ window.adminPrintClassReport = function() {
   pa.style.display='block'; window.print(); setTimeout(()=>pa.style.display='none',1000);
 };
 
+// ── PROMOTE / TRANSFER ──
+let allClasses   = []; // loaded fresh for promote tab
+let promoteSource = null;
+
+async function renderPromoteTab() {
+  // Load all classes fresh
+  showLoading('載入班級...');
+  try {
+    const snap = await getDocs(collection(db,'classes'));
+    allClasses = snap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  } catch(e) { console.error(e); allClasses=[]; }
+  hideLoading();
+
+  renderPromoteClassList();
+  populateTransferSelects();
+  document.getElementById('promotePanel').style.display='none';
+}
+
+function renderPromoteClassList() {
+  const el = document.getElementById('promoteClassList');
+  if (!allClasses.length) { el.innerHTML='<div style="color:var(--muted);font-size:13px">尚無班級資料</div>'; return; }
+
+  // Group by teacher
+  const byTeacher = {};
+  allClasses.forEach(c => {
+    const tid = c.teacherId||'unknown';
+    if (!byTeacher[tid]) byTeacher[tid] = {name: teachers.find(t=>t.userId===tid)?.name||tid, classes:[]};
+    byTeacher[tid].classes.push(c);
+  });
+
+  el.innerHTML = Object.values(byTeacher).map(g => `
+    <div style="margin-bottom:16px;">
+      <div style="font-size:12px;font-weight:700;color:var(--muted);letter-spacing:1px;margin-bottom:8px;">👤 ${g.name}</div>
+      ${g.classes.map(c => {
+        const isArchived = c.archived;
+        return `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:${isArchived?'rgba(255,255,255,.03)':'rgba(255,255,255,.05)'};border:1px solid ${isArchived?'var(--border)':'rgba(86,204,178,.15)'};border-radius:10px;margin-bottom:6px;opacity:${isArchived?'.5':'1'}">
+          <div style="flex:1">
+            <span style="font-size:14px;font-weight:700">${c.name}</span>
+            ${isArchived?'<span style="margin-left:8px;font-size:11px;background:rgba(255,255,255,.1);border-radius:10px;padding:2px 8px;color:var(--muted)">已封存</span>':''}
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">${(c.students||[]).length}人：${(c.students||[]).slice(0,4).join('、')}${(c.students||[]).length>4?'…':''}</div>
+          </div>
+          ${!isArchived ? `<button onclick="openPromotePanel('${c._id}')" style="background:linear-gradient(135deg,var(--teal),#2ecc71);border:none;border-radius:8px;padding:7px 14px;color:#0d1117;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">🎓 升班</button>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`).join('');
+}
+
+window.openPromotePanel = function(classId) {
+  const cls = allClasses.find(c=>c._id===classId);
+  if (!cls) return;
+  promoteSource = cls;
+
+  const teacher = teachers.find(t=>t.userId===cls.teacherId);
+  document.getElementById('promoteSourceName').textContent  = cls.name;
+  document.getElementById('promoteSourceName2').textContent = cls.name;
+  document.getElementById('promoteSourceTeacher').textContent = teacher?.name||cls.teacherId;
+  document.getElementById('promoteNewName').value = '';
+  document.getElementById('promoteNewName').placeholder = '例：' + cls.name.replace(/五/g,'六').replace(/六/g,'國一');
+
+  // Teacher select
+  const tSel = document.getElementById('promoteNewTeacher');
+  tSel.innerHTML = '<option value="">-- 沿用原老師 --</option>' +
+    teachers.map(t=>`<option value="${t.userId}"${t.userId===cls.teacherId?' selected':''}>${t.name}</option>`).join('');
+
+  // Student list (editable)
+  renderPromoteStudents([...cls.students]);
+
+  document.getElementById('promotePanel').style.display='block';
+  document.getElementById('promotePanel').scrollIntoView({behavior:'smooth', block:'start'});
+};
+
+let promoteStudents = [];
+function renderPromoteStudents(list) {
+  promoteStudents = list;
+  const el = document.getElementById('promoteStudentList');
+  el.innerHTML = promoteStudents.map((s,i) => `
+    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+      <input value="${s}" placeholder="學生姓名"
+        style="flex:1;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:8px 10px;color:var(--text);font-family:inherit;font-size:14px;outline:none"
+        oninput="promoteStudents[${i}]=this.value">
+      <button onclick="removePromoteStudent(${i})" style="background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:6px 10px;color:var(--red);font-family:inherit;cursor:pointer;font-size:13px;">✕</button>
+    </div>`).join('');
+}
+
+window.addPromoteStudent = function() {
+  renderPromoteStudents([...promoteStudents, '']);
+  // Focus last input
+  setTimeout(()=>{
+    const inputs = document.querySelectorAll('#promoteStudentList input');
+    if (inputs.length) inputs[inputs.length-1].focus();
+  },50);
+};
+window.removePromoteStudent = function(i) {
+  promoteStudents.splice(i,1);
+  renderPromoteStudents([...promoteStudents]);
+};
+window.cancelPromote = function() {
+  document.getElementById('promotePanel').style.display='none';
+  promoteSource=null;
+};
+
+window.executePromote = async function() {
+  if (!promoteSource) return;
+  const newName    = document.getElementById('promoteNewName').value.trim();
+  const newTeacher = document.getElementById('promoteNewTeacher').value || promoteSource.teacherId;
+  const students   = promoteStudents.map(s=>s.trim()).filter(Boolean);
+
+  if (!newName) { showToast('請填寫新班級名稱','error'); return; }
+  if (!students.length) { showToast('請至少保留一位學生','error'); return; }
+  if (!confirm(`確定執行升班？\n\n舊班「${promoteSource.name}」→ 封存\n新班「${newName}」→ 建立\n\n此操作無法復原。`)) return;
+
+  showLoading('執行升班中...');
+  try {
+    const teacher = teachers.find(t=>t.userId===newTeacher);
+
+    // 1. Archive old class
+    await updateDoc(doc(db,'classes',promoteSource._id), {
+      archived: true,
+      archivedAt: Date.now(),
+      archivedNote: `升班至 ${newName}`
+    });
+
+    // 2. Create new class
+    await addDoc(collection(db,'classes'), {
+      teacherId: newTeacher,
+      teacherName: teacher?.name||newTeacher,
+      name: newName,
+      students,
+      createdAt: Date.now(),
+      promotedFrom: promoteSource._id,
+      promotedFromName: promoteSource.name
+    });
+
+    showToast(`✅ 升班完成！「${promoteSource.name}」已封存，「${newName}」已建立`);
+    cancelPromote();
+    await renderPromoteTab();
+  } catch(e) { showToast('❌ 升班失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+function populateTransferSelects() {
+  const activeCls = allClasses.filter(c=>!c.archived);
+  const cSel = document.getElementById('transferClassSelect');
+  const tSel = document.getElementById('transferTeacherSelect');
+  cSel.innerHTML = '<option value="">-- 選擇班級 --</option>'+activeCls.map(c=>`<option value="${c._id}">${c.name}（${teachers.find(t=>t.userId===c.teacherId)?.name||c.teacherId}）</option>`).join('');
+  tSel.innerHTML = '<option value="">-- 選擇新老師 --</option>'+teachers.map(t=>`<option value="${t.userId}">${t.name}</option>`).join('');
+}
+
+window.transferClass = async function(mode) {
+  const classId   = document.getElementById('transferClassSelect').value;
+  const newTchId  = document.getElementById('transferTeacherSelect').value;
+  if (!classId)  { showToast('請選擇班級','error'); return; }
+  if (!newTchId) { showToast('請選擇新老師','error'); return; }
+
+  const cls      = allClasses.find(c=>c._id===classId);
+  const newTch   = teachers.find(t=>t.userId===newTchId);
+  const oldTch   = teachers.find(t=>t.userId===cls?.teacherId);
+  if (!cls||!newTch) { showToast('資料錯誤','error'); return; }
+  if (cls.teacherId===newTchId) { showToast('新老師與原老師相同','error'); return; }
+
+  const actionText = mode==='move'?`轉移（${oldTch?.name} → ${newTch.name}，${oldTch?.name} 將移除此班）`:`複製（${oldTch?.name} 保留，${newTch.name} 新增一份）`;
+  if (!confirm(`確定${actionText}？\n\n班級：${cls.name}`)) return;
+
+  showLoading('處理中...');
+  try {
+    if (mode==='move') {
+      // Transfer: update class teacherId + update all entries
+      await updateDoc(doc(db,'classes',classId), {
+        teacherId: newTchId,
+        teacherName: newTch.name
+      });
+      // Update all entries for this class
+      const eSnap = await getDocs(query(collection(db,'entries'), where('classId','==',classId)));
+      const batch = eSnap.docs.map(d => updateDoc(doc(db,'entries',d.id), {teacherId:newTchId, teacherName:newTch.name}));
+      await Promise.all(batch);
+      showToast(`✅ 班級「${cls.name}」已轉移給 ${newTch.name}`);
+    } else {
+      // Copy: create new class with new teacher
+      await addDoc(collection(db,'classes'), {
+        teacherId: newTchId,
+        teacherName: newTch.name,
+        name: cls.name,
+        students: [...cls.students],
+        createdAt: Date.now(),
+        copiedFrom: classId,
+        copiedFromTeacher: cls.teacherId
+      });
+      showToast(`✅ 班級「${cls.name}」已複製給 ${newTch.name}`);
+    }
+    await renderPromoteTab();
+  } catch(e) { showToast('❌ 操作失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
 // ── ADMIN ACCOUNTS ──
 function renderTeachers() {
   document.getElementById('teacherCount').textContent = teachers.length;
@@ -2070,6 +2195,7 @@ window.confirmDelete= async function() {
       <button class="tab" onclick="adminSwitchTab('student',this)">👤 學生查詢</button>
       <button class="tab" onclick="adminSwitchTab('schedule',this)">📅 周課表</button>
       <button class="tab" onclick="adminSwitchTab('classreport',this)">📊 班級報表</button>
+      <button class="tab" onclick="adminSwitchTab('promote',this)">🎓 升班管理</button>
       <button class="tab" onclick="adminSwitchTab('accounts',this)">⚙️ 帳號管理</button>
     </div>
 
@@ -2154,6 +2280,80 @@ window.confirmDelete= async function() {
           </div>
         </div>
         <div id="missingLogsResult"></div>
+      </div>
+    </div>
+
+    <!-- PROMOTE -->
+    <div id="admin-tab-promote" style="display:none;">
+
+      <div style="background:rgba(86,204,178,.07);border:1px solid rgba(86,204,178,.2);border-radius:var(--radius);padding:16px;margin-bottom:14px;">
+        <div style="font-size:13px;color:var(--muted);line-height:1.6">
+          <strong style="color:var(--teal)">升班流程說明：</strong><br>
+          ① 選擇要升班的班級　② 填寫新班級名稱　③ 選擇新任老師　④ 調整學生名單（可增減）　⑤ 執行升班<br>
+          舊班將被封存（可查閱不可填寫），新班自動建立並繼承學生名單。
+        </div>
+      </div>
+
+      <!-- 班級列表 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px;">
+        <div style="font-size:15px;font-weight:700;margin-bottom:14px;">📋 目前所有班級</div>
+        <div id="promoteClassList"></div>
+      </div>
+
+      <!-- 升班設定面板（初始隱藏） -->
+      <div id="promotePanel" style="display:none;background:var(--surface);border:1px solid rgba(86,204,178,.3);border-radius:var(--radius);padding:18px;">
+        <div style="font-size:15px;font-weight:700;color:var(--teal);margin-bottom:16px;">🎓 升班設定</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:14px;">原班級：<strong id="promoteSourceName" style="color:var(--text)"></strong>　老師：<strong id="promoteSourceTeacher" style="color:var(--text)"></strong></div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+          <div>
+            <label class="field-label">新班級名稱</label>
+            <input class="field-input" id="promoteNewName" placeholder="例：六年A班英文" style="margin-bottom:0">
+          </div>
+          <div>
+            <label class="field-label">新任老師</label>
+            <select class="select-input" id="promoteNewTeacher" style="margin-bottom:0">
+              <option value="">-- 選擇老師 --</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <label class="field-label" style="margin-bottom:0">學生名單（可調整）</label>
+            <button onclick="addPromoteStudent()" style="background:none;border:1px solid var(--teal);border-radius:8px;padding:4px 12px;color:var(--teal);font-family:inherit;font-size:12px;cursor:pointer;">＋ 新增學生</button>
+          </div>
+          <div id="promoteStudentList"></div>
+        </div>
+
+        <div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.2);border-radius:10px;padding:12px;margin-bottom:16px;font-size:12px;color:var(--muted);">
+          ⚠️ 執行後無法復原。舊班「<span id="promoteSourceName2"></span>」將被封存，所有歷史日誌保留可查閱。
+        </div>
+
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-ghost" style="flex:1" onclick="cancelPromote()">取消</button>
+          <button class="btn btn-teal" style="flex:1;padding:11px;font-weight:700;" onclick="executePromote()">🎓 執行升班</button>
+        </div>
+      </div>
+
+      <!-- 換老師面板 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-top:14px;">
+        <div style="font-size:15px;font-weight:700;margin-bottom:14px;">🔄 換老師（轉移班級）</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">選擇班級和新老師，班級（含歷史日誌）整個轉移給新老師；或複製班級給新老師，舊老師保留原班。</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+          <div>
+            <label class="field-label">選擇班級</label>
+            <select class="select-input" id="transferClassSelect" style="margin-bottom:0"></select>
+          </div>
+          <div>
+            <label class="field-label">新老師</label>
+            <select class="select-input" id="transferTeacherSelect" style="margin-bottom:0"></select>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-teal" style="flex:1;padding:10px;" onclick="transferClass('move')">➡️ 轉移（舊老師移除）</button>
+          <button class="btn btn-purple" style="flex:1;padding:10px;" onclick="transferClass('copy')">📋 複製（舊老師保留）</button>
+        </div>
       </div>
     </div>
 
