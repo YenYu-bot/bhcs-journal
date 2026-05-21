@@ -284,7 +284,7 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
     <div id="tab-journal">
       <div class="card">
         <div class="card-title">① 選擇班級</div>
-        <select class="select-input" id="journalClassSelect" onchange="onClassSelect()">
+        <select class="select-input" id="journalClassSelect" onchange="onClassSelect()" onfocus="_lastSelectedClassId=null">
           <option value="">-- 請選擇班級 --</option>
         </select>
         <div id="selectedClassInfo" style="margin-top:10px;display:none;font-size:13px;color:var(--muted);"></div>
@@ -322,9 +322,9 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <div class="card-title" style="margin-bottom:0">📝 作業繳交</div>
             <div style="display:flex;gap:6px;font-size:11px;flex-wrap:wrap;">
-              <span style="color:var(--teal)">●已完成</span>
-              <span style="color:var(--yellow)">●部分缺繳</span>
-              <span style="color:var(--red)">●缺繳</span>
+              <span style="color:var(--teal)">●優良</span>
+              <span style="color:var(--yellow)">●部分未完成</span>
+              <span style="color:var(--red)">●未完成/沒帶</span>
             </div>
           </div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">點擊學生依序切換狀態</div>
@@ -483,7 +483,7 @@ const ADMIN_PASS = 'admin888';
 
 const HW_STATES  = ['good','partial','missing'];
 const HW_CLASSES = {good:'hw-good', partial:'hw-partial', missing:'hw-missing'};
-const HW_LABELS  = {good:'已完成', partial:'部分缺繳', missing:'缺繳'};
+const HW_LABELS  = {good:'優良', partial:'部分未完成', missing:'未完成/沒帶'};
 const HW_EMOJI   = {good:'✅', partial:'⚠️', missing:'❌'};
 
 function hwVal(v) {
@@ -592,8 +592,7 @@ window.login = async function() {
       showPage('teacher');
       document.getElementById('teacherBadge').textContent = t.name;
       const k = localStorage.getItem('openaiKey');
-      const apiKeyEl = document.getElementById('apiKey');
-      if (k && apiKeyEl) apiKeyEl.value = k;
+      if (k) document.getElementById('apiKey').value = k;
       loadClasses();
       loadEntries();
     } else {
@@ -641,13 +640,12 @@ async function loadClasses() {
 
 function refreshClassSelect() {
   const sel = document.getElementById('journalClassSelect');
+  if (!sel) return;
   sel.innerHTML = '<option value="">-- 請選擇班級 --</option>' +
     myClasses.map(c => `<option value="${c._id}">${c.name}（${c.students.length}人）</option>`).join('');
-  // If only one class, auto-select it and trigger
+  // If only one class, pre-select it so user just needs to confirm
   if (myClasses.length === 1) {
     sel.value = myClasses[0]._id;
-    _lastSelectedClassId = null;
-    onClassSelect();
   }
 }
 
@@ -744,82 +742,22 @@ window.onClassSelect = function() {
   const now = new Date();
   const mm  = String(now.getMonth()+1).padStart(2,'0');
   const dd  = String(now.getDate()).padStart(2,'0');
-  document.getElementById('fDate').value    = `${mm}/${dd}`;
-  document.getElementById('fWeekday').value = ['日','一','二','三','四','五','六'][now.getDay()];
-  ['fProgress','fHomework','fNextExam','fNotes'].forEach(id => document.getElementById(id).value='');
-  document.getElementById('selectedClassInfo').style.display  = 'block';
-  document.getElementById('selectedClassInfo').textContent = `班級：${cls.name}　學生：${cls.students.join('、')}`;
-  document.getElementById('journalForm').style.display = 'block';
+  const fDate = document.getElementById('fDate');
+  const fWeekday = document.getElementById('fWeekday');
+  if (fDate) fDate.value = `${mm}/${dd}`;
+  if (fWeekday) fWeekday.value = ['日','一','二','三','四','五','六'][now.getDay()];
+  ['fProgress','fHomework','fNextExam','fNotes'].forEach(fid => {
+    const el = document.getElementById(fid);
+    if (el) el.value = '';
+  });
+
+  const selInfo = document.getElementById('selectedClassInfo');
+  const journalForm = document.getElementById('journalForm');
+  if (selInfo) { selInfo.style.display='block'; selInfo.textContent=`班級：${cls.name}　學生：${cls.students.join('、')}`; }
+  if (journalForm) journalForm.style.display = 'block';
 
   renderAttendance(); renderHomework(); renderRatingGrid(); renderExams();
 };
-
-
-// ── INPUT RENDERERS ──
-function renderAttendance() {
-  const el = document.getElementById('attendanceGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map((s, i) => {
-    const st = normAtt(attendance[s]);
-    return `<div class="att-chip ${ATT_CLASSES[st]}" onclick="cycleAtt(${i})">
-      <span class="chip-name">${s}</span>
-      <span class="att-status">${ATT_EMOJI[st]} ${ATT_LABELS[st]}</span>
-    </div>`;
-  }).join('');
-}
-
-window.cycleAtt = function(i) {
-  const s = currentStudents[i];
-  if (!s) return;
-  const now = normAtt(attendance[s]);
-  const next = ATT_STATES[(ATT_STATES.indexOf(now) + 1) % ATT_STATES.length];
-  attendance[s] = next;
-  renderAttendance();
-};
-
-function renderHomework() {
-  const el = document.getElementById('homeworkGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map((s, i) => {
-    const st = hwVal(homework[s]);
-    return `<div class="att-chip ${HW_CLASSES[st]}" onclick="cycleHomework(${i})">
-      <span class="chip-name">${s}</span>
-      <span class="att-status">${HW_EMOJI[st]} ${HW_LABELS[st]}</span>
-    </div>`;
-  }).join('');
-}
-
-window.cycleHomework = function(i) {
-  const s = currentStudents[i];
-  if (!s) return;
-  const now = hwVal(homework[s]);
-  const next = HW_STATES[(HW_STATES.indexOf(now) + 1) % HW_STATES.length];
-  homework[s] = next;
-  renderHomework();
-};
-
-function renderRatingGrid() {
-  const el = document.getElementById('ratingGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map((s, i) => {
-    const r = Number(classRating[s] || 0);
-    return `<div class="rating-row">
-      <span class="rating-name">${s}</span>
-      <div class="rating-stars">
-        ${[1,2,3,4,5].map(n => `<button type="button" class="star-btn ${n <= r ? 'active' : ''}" onclick="setRating(${i},${n})" title="${RATING_LABELS[n]}">⭐</button>`).join('')}
-      </div>
-      <span class="rating-label" style="color:${r ? RATING_COLORS[r] : 'var(--muted)'}">${r ? r + '分' : '-'}</span>
-    </div>`;
-  }).join('');
-}
-
-window.setRating = function(i, value) {
-  const s = currentStudents[i];
-  if (!s) return;
-  classRating[s] = Number(classRating[s] || 0) === value ? 0 : value;
-  renderRatingGrid();
-};
-
 
 // ── MULTI-EXAM SYSTEM ──
 let examIdCounter = 1;
@@ -836,19 +774,6 @@ window.removeExam = function(id) {
 window.toggleExamMode = function(id, mode) {
   const ex=exams.find(e=>e.id===id);
   if(ex){ex.mode=mode;renderExams();}
-};
-
-window.updateExamRange = function(id, value) {
-  const ex = exams.find(e => e.id === id);
-  if (ex) ex.range = value;
-};
-
-window.updateExamMax = function(id, value) {
-  const ex = exams.find(e => e.id === id);
-  if (ex) {
-    ex.maxScore = parseFloat(value) || 100;
-    renderExams();
-  }
 };
 
 function renderExams() {
@@ -869,12 +794,12 @@ function renderExams() {
         <span class="exam-label">📋 考試 ${ei+1}</span>
         <input value="${ex.range||''}" placeholder="考試範圍（例：Unit 3 單字）"
           style="flex:1;min-width:140px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none"
-          oninput="updateExamRange(${ex.id}, this.value)">
+          oninput="exams.find(e=>e.id===${ex.id}).range=this.value">
         <div style="display:flex;gap:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:2px">
           <button onclick="toggleExamMode(${ex.id},'score')" style="${!isGrade?'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🔢 分數</button>
           <button onclick="toggleExamMode(${ex.id},'grade')" style="${isGrade?'background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🅰 等第</button>
         </div>
-        ${!isGrade?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:11px;color:var(--muted)">滿分</span><input type="number" value="${ex.maxScore}" min="1" max="9999" style="width:58px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 6px;color:var(--text);font-family:inherit;font-size:13px;text-align:center;outline:none" oninput="updateExamMax(${ex.id}, this.value)"><span style="font-size:11px;color:var(--muted)">分</span></div>`:''}
+        ${!isGrade?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:11px;color:var(--muted)">滿分</span><input type="number" value="${ex.maxScore}" min="1" max="9999" style="width:58px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 6px;color:var(--text);font-family:inherit;font-size:13px;text-align:center;outline:none" oninput="exams.find(e=>e.id===${ex.id}).maxScore=parseFloat(this.value)||100;renderExams()"><span style="font-size:11px;color:var(--muted)">分</span></div>`:''}
         ${exams.length>1?`<button onclick="removeExam(${ex.id})" style="background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:5px 10px;color:var(--red);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">✕</button>`:''}
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -943,6 +868,7 @@ window.saveEntry = async function() {
   if (!cls)  { showToast('請選擇班級','error'); return; }
   if (!date) { showToast('請填寫日期','error'); return; }
 
+  const maxScore = parseFloat(document.getElementById('maxScore').value)||100;
   const entry = {
     teacherId:currentUser.id, teacherName:currentUser.name,
     classId:clsId, className:cls.name,
