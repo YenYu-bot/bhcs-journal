@@ -1129,15 +1129,20 @@ function buildHwTable(es, dates, students) {
     <thead><tr style="background:rgba(255,255,255,.06)">
       <th style="padding:8px 10px;text-align:left;border:1px solid var(--border)">學生</th>
       ${dates.map(d=>`<th style="padding:8px 6px;border:1px solid var(--border);min-width:52px;text-align:center">${d}</th>`).join('')}
-      <th style="padding:8px;border:1px solid var(--border);text-align:center">已繳</th>
-      <th style="padding:8px;border:1px solid var(--border);text-align:center">未繳</th>
+      <th style="padding:8px;border:1px solid var(--border);text-align:center">優良</th>
+      <th style="padding:8px;border:1px solid var(--border);text-align:center">異常</th>
     </tr></thead><tbody>`;
   students.forEach(s => {
-    const done = es.filter(e=>e.homework?.[s]!==false).length;
+    const hwList = es.map(e=>hwVal(e.homework?.[s]));
+    const done   = hwList.filter(h=>h==='good').length;
+    const miss   = es.length - done;
     t += `<tr><td style="padding:8px 10px;border:1px solid var(--border);font-weight:700">${s}</td>
-      ${es.map(e=>{const ok=e.homework?.[s]!==false;return `<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${ok?'rgba(86,204,178,.2)':'rgba(255,107,107,.2)'};font-size:14px">${ok?'✅':'⚠️'}</td>`;}).join('')}
+      ${hwList.map(h=>{
+        const bg=h==='good'?'rgba(86,204,178,.2)':h==='partial'?'rgba(255,209,102,.2)':'rgba(255,107,107,.2)';
+        return `<td style="padding:6px;border:1px solid var(--border);text-align:center;background:${bg};font-size:14px">${HW_EMOJI[h]}</td>`;
+      }).join('')}
       <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:#56ccb2">${done}</td>
-      <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${(es.length-done)>0?'#ff6b6b':'var(--muted)'}">${es.length-done}</td>
+      <td style="padding:8px;border:1px solid var(--border);text-align:center;font-weight:700;color:${miss>0?'#ff6b6b':'var(--muted)'}">${miss}</td>
     </tr>`;
   });
   return t+`</tbody></table></div></div>`;
@@ -2049,29 +2054,35 @@ window.generateClassReport = function() {
     return;
   }
 
-  const dates   = classEntries.map(e=>e.date);
-  const allStus = [...new Set(classEntries.flatMap(e=>e.students||[]))];
-  const className = classEntries[0].className||classId;
-  const teacherName = classEntries[0].teacherName||'';
+  // Normalize entries: ensure all have e.exams (compat with old e.scores)
+  const normalizedEntries = classEntries.map(e => {
+    if (e.exams?.length) return e;
+    if (Object.keys(e.scores||{}).some(k=>e.scores[k]!==''&&e.scores[k]!=null)) {
+      return {...e, exams:[{id:0,range:'',mode:'score',maxScore:e.maxScore||100,scores:e.scores}]};
+    }
+    return {...e, exams:[]};
+  });
+
+  const dates   = normalizedEntries.map(e=>e.date);
+  const allStus = [...new Set(normalizedEntries.flatMap(e=>e.students||[]))];
+  const className = normalizedEntries[0].className||classId;
+  const teacherName = normalizedEntries[0].teacherName||'';
 
   let html = `<div style="font-size:16px;font-weight:900;color:var(--purple);margin-bottom:4px">🏫 ${className}</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:16px">授課老師：${teacherName}　共 ${classEntries.length} 筆記錄　${startStr||''}${startStr&&endStr?' ～ ':''}${endStr||''}</div>`;
+    <div style="font-size:12px;color:var(--muted);margin-bottom:16px">授課老師：${teacherName}　共 ${normalizedEntries.length} 筆記錄　${startStr||''}${startStr&&endStr?' ～ ':''}${endStr||''}</div>`;
 
-  // Attendance table
-  html += buildAttTable(classEntries, dates, allStus);
-  // Homework table
-  html += buildHwTable(classEntries, dates, allStus);
-  // Score tables (one per exam slot across entries)
-  const allExamSlots = Math.max(...classEntries.map(e=>(e.exams||[]).length), 0);
+  html += buildAttTable(normalizedEntries, dates, allStus);
+  html += buildHwTable(normalizedEntries, dates, allStus);
+
+  const allExamSlots = Math.max(...normalizedEntries.map(e=>(e.exams||[]).length), 0);
   for (let ei=0; ei<allExamSlots; ei++) {
-    const scoreEntries = classEntries.filter(e=>(e.exams||[])[ei]);
+    const scoreEntries = normalizedEntries.filter(e=>(e.exams||[])[ei]);
     if (scoreEntries.length) {
       const label = scoreEntries[0].exams[ei].range || `考試${ei+1}`;
       html += adminBuildScoreTable(scoreEntries, allStus, ei, label);
     }
   }
-  // Rating table
-  html += buildRatingTable(classEntries, dates, allStus);
+  html += buildRatingTable(normalizedEntries, dates, allStus);
 
   document.getElementById('adminPrintArea').innerHTML=`<div style="font-family:'Noto Sans TC',sans-serif;padding:20px;color:#000;background:#fff"><h2>百宏文教機構 · 班級報表</h2>${html}</div>`;
   outEl.innerHTML = html;
