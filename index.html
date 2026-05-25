@@ -762,6 +762,57 @@ window.onClassSelect = function() {
 // ── MULTI-EXAM SYSTEM ──
 let examIdCounter = 1;
 
+function renderAttendance() {
+  const el = document.getElementById('attendanceGrid');
+  if (!el) return;
+  el.innerHTML = currentStudents.map(s => `
+    <div class="att-chip ${ATT_CLASSES[attendance[s]||'present']}" onclick="cycleAtt('${s}')">
+      <span class="chip-name">${s}</span>
+      <span class="att-status">${ATT_LABELS[attendance[s]||'present']}</span>
+    </div>`).join('');
+}
+window.cycleAtt = function(s) {
+  const idx = ATT_STATES.indexOf(attendance[s]||'present');
+  attendance[s] = ATT_STATES[(idx+1) % ATT_STATES.length];
+  renderAttendance();
+};
+
+function renderHomework() {
+  const el = document.getElementById('homeworkGrid');
+  if (!el) return;
+  el.innerHTML = currentStudents.map(s => {
+    const st = hwVal(homework[s]);
+    return `<div class="att-chip ${HW_CLASSES[st]}" onclick="cycleHw('${s}')">
+      <span class="chip-name">${s}</span>
+      <span class="att-status">${HW_LABELS[st]}</span>
+    </div>`;
+  }).join('');
+}
+window.cycleHw = function(s) {
+  const idx = HW_STATES.indexOf(hwVal(homework[s]));
+  homework[s] = HW_STATES[(idx+1) % HW_STATES.length];
+  renderHomework();
+};
+
+function renderRatingGrid() {
+  const el = document.getElementById('ratingGrid');
+  if (!el) return;
+  el.innerHTML = currentStudents.map(s => {
+    const r = classRating[s] || 0;
+    return `<div class="rating-row">
+      <span class="rating-name">${s}</span>
+      <div class="rating-stars">
+        ${[1,2,3,4,5].map(i=>`<button class="star-btn ${i<=r?'active':''}" onclick="setRating('${s}',${i})" title="${RATING_LABELS[i]}">⭐</button>`).join('')}
+      </div>
+      <span class="rating-label" style="color:${r?RATING_COLORS[r]:'var(--muted)'}">${r?r+'分':'-'}</span>
+    </div>`;
+  }).join('');
+}
+window.setRating = function(s, val) {
+  classRating[s] = classRating[s] === val ? 0 : val;
+  renderRatingGrid();
+};
+
 window.addExam = function() {
   exams.push({id:examIdCounter++, range:'', mode:'score', maxScore:100, scores:{}});
   renderExams();
