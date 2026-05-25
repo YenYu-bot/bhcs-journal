@@ -1264,6 +1264,7 @@ window.adminSwitchTab = function(name, el) {
   if (name==='student') renderAdminStudentPick();
   if (name==='schedule') { renderScheduleEditor(); renderScheduleStatusBanner(); }
   if (name==='alerts') populateAlertFilters();
+  if (name==='classreport') populateClassReportSelect();
   if (name==='promote') renderPromoteTab();
 };
 
@@ -1304,10 +1305,26 @@ function adminPopulateFilters() {
   document.getElementById('filterDate').innerHTML    = '<option value="">所有日期</option>'+dates.map(d=>`<option>${d}</option>`).join('');
 }
 
-function populateClassReportSelect() {
-  const classes = [...new Set(allEntries.map(e=>e.className).filter(Boolean))].sort();
+async function populateClassReportSelect() {
   const sel = document.getElementById('classReportSelect');
-  if (sel) sel.innerHTML = '<option value="">-- 請選擇班級 --</option>'+classes.map(c=>`<option value="${c}">${c}</option>`).join('');
+  if (!sel) return;
+  // Merge from allEntries + allClasses (already loaded in renderPromoteTab)
+  // Also try to load from Firestore if allClasses is empty
+  let classList = allClasses.filter(c=>!c.archived);
+  if (!classList.length) {
+    try {
+      const snap = await getDocs(collection(db,'classes'));
+      classList = snap.docs.map(d=>({_id:d.id,...d.data()})).filter(c=>!c.archived);
+    } catch(e) { console.error(e); }
+  }
+  // Also add classes from entries that might not be in allClasses
+  const entryClasses = [...new Set(allEntries.map(e=>e.className).filter(Boolean))];
+  const classNames = new Set([
+    ...classList.map(c=>c.name),
+    ...entryClasses
+  ]);
+  sel.innerHTML = '<option value="">-- 請選擇班級 --</option>' +
+    [...classNames].sort().map(c=>`<option value="${c}">${c}</option>`).join('');
 }
 
 window.adminRenderEntries = function() {
