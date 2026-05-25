@@ -284,7 +284,7 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
     <div id="tab-journal">
       <div class="card">
         <div class="card-title">① 選擇班級</div>
-        <select class="select-input" id="journalClassSelect" onchange="onClassSelect()">
+        <select class="select-input" id="journalClassSelect" onchange="onClassSelect()" onfocus="_lastSelectedClassId=null">
           <option value="">-- 請選擇班級 --</option>
         </select>
         <div id="selectedClassInfo" style="margin-top:10px;display:none;font-size:13px;color:var(--muted);"></div>
@@ -322,9 +322,9 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
             <div class="card-title" style="margin-bottom:0">📝 作業繳交</div>
             <div style="display:flex;gap:6px;font-size:11px;flex-wrap:wrap;">
-              <span style="color:var(--teal)">●已完成</span>
-              <span style="color:var(--yellow)">●部分缺繳</span>
-              <span style="color:var(--red)">●缺繳</span>
+              <span style="color:var(--teal)">●優良</span>
+              <span style="color:var(--yellow)">●部分未完成</span>
+              <span style="color:var(--red)">●未完成/沒帶</span>
             </div>
           </div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">點擊學生依序切換狀態</div>
@@ -483,7 +483,7 @@ const ADMIN_PASS = 'admin888';
 
 const HW_STATES  = ['good','partial','missing'];
 const HW_CLASSES = {good:'hw-good', partial:'hw-partial', missing:'hw-missing'};
-const HW_LABELS  = {good:'已完成', partial:'部分缺繳', missing:'缺繳'};
+const HW_LABELS  = {good:'優良', partial:'部分未完成', missing:'未完成/沒帶'};
 const HW_EMOJI   = {good:'✅', partial:'⚠️', missing:'❌'};
 
 function hwVal(v) {
@@ -592,8 +592,7 @@ window.login = async function() {
       showPage('teacher');
       document.getElementById('teacherBadge').textContent = t.name;
       const k = localStorage.getItem('openaiKey');
-      const apiKeyEl = document.getElementById('apiKey');
-      if (k && apiKeyEl) apiKeyEl.value = k;
+      if (k) document.getElementById('apiKey').value = k;
       loadClasses();
       loadEntries();
     } else {
@@ -641,13 +640,12 @@ async function loadClasses() {
 
 function refreshClassSelect() {
   const sel = document.getElementById('journalClassSelect');
+  if (!sel) return;
   sel.innerHTML = '<option value="">-- 請選擇班級 --</option>' +
     myClasses.map(c => `<option value="${c._id}">${c.name}（${c.students.length}人）</option>`).join('');
-  // If only one class, auto-select it and trigger
+  // If only one class, pre-select it so user just needs to confirm
   if (myClasses.length === 1) {
     sel.value = myClasses[0]._id;
-    _lastSelectedClassId = null;
-    onClassSelect();
   }
 }
 
@@ -727,134 +725,39 @@ window.deleteClass = async function(id, name) {
 
 // ── JOURNAL FORM ──
 window.onClassSelect = function() {
-  const selectEl = document.getElementById('journalClassSelect');
-  const id  = selectEl ? selectEl.value : '';
-  const formEl = document.getElementById('journalForm');
-  const infoEl = document.getElementById('selectedClassInfo');
-
-  if (!id) {
-    if (formEl) formEl.style.display = 'none';
-    if (infoEl) infoEl.style.display = 'none';
-    _lastSelectedClassId = null;
-    return;
-  }
-
-  const cls = myClasses.find(c => c._id === id);
-  if (!cls) {
-    if (formEl) formEl.style.display = 'none';
-    if (infoEl) infoEl.style.display = 'none';
-    return;
-  }
-
-  const students = Array.isArray(cls.students)
-    ? cls.students.filter(Boolean)
-    : String(cls.students || '').split(/[、,，\n]/).map(x => x.trim()).filter(Boolean);
-
-  currentStudents = students;
-  attendance = {};
-  homework = {};
-  classRating = {};
-  currentStudents.forEach(s => {
-    attendance[s] = 'present';
-    homework[s] = 'good';
-    classRating[s] = 0;
-  });
-
-  exams = [{id:0, range:'', mode:'score', maxScore:100, scores:{}}];
-  examIdCounter = 1;
+  const id  = document.getElementById('journalClassSelect').value;
+  if (!id) { document.getElementById('journalForm').style.display='none'; _lastSelectedClassId=null; return; }
+  if (id === _lastSelectedClassId) return; // already loaded
   _lastSelectedClassId = id;
+  const cls = myClasses.find(c => c._id === id);
+  if (!cls) { document.getElementById('journalForm').style.display='none'; return; }
 
+  currentStudents = [...cls.students];
+  attendance  = {}; homework = {}; classRating = {};
+  currentStudents.forEach(s => { attendance[s]='present'; homework[s]='good'; classRating[s]=0; });
+  exams=[{id:0,range:'',mode:'score',maxScore:100,scores:{}}];
+  examIdCounter=1;
+
+  // Auto-fill today
   const now = new Date();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  const dateEl = document.getElementById('fDate');
-  const weekdayEl = document.getElementById('fWeekday');
-  if (dateEl) dateEl.value = `${mm}/${dd}`;
-  if (weekdayEl) weekdayEl.value = ['日','一','二','三','四','五','六'][now.getDay()];
-  ['fProgress','fHomework','fNextExam','fNotes'].forEach(inputId => {
-    const el = document.getElementById(inputId);
+  const mm  = String(now.getMonth()+1).padStart(2,'0');
+  const dd  = String(now.getDate()).padStart(2,'0');
+  const fDate = document.getElementById('fDate');
+  const fWeekday = document.getElementById('fWeekday');
+  if (fDate) fDate.value = `${mm}/${dd}`;
+  if (fWeekday) fWeekday.value = ['日','一','二','三','四','五','六'][now.getDay()];
+  ['fProgress','fHomework','fNextExam','fNotes'].forEach(fid => {
+    const el = document.getElementById(fid);
     if (el) el.value = '';
   });
 
-  if (infoEl) {
-    infoEl.style.display = 'block';
-    infoEl.textContent = `班級：${cls.name}　學生：${currentStudents.join('、')}`;
-  }
-  if (formEl) formEl.style.display = 'block';
+  const selInfo = document.getElementById('selectedClassInfo');
+  const journalForm = document.getElementById('journalForm');
+  if (selInfo) { selInfo.style.display='block'; selInfo.textContent=`班級：${cls.name}　學生：${cls.students.join('、')}`; }
+  if (journalForm) journalForm.style.display = 'block';
 
-  // 直接重繪，不做「同班級略過」，避免下拉選單變更後畫面空白。
-  renderAttendance();
-  renderHomework();
-  renderRatingGrid();
-  renderExams();
+  renderAttendance(); renderHomework(); renderRatingGrid(); renderExams();
 };
-
-
-// ── INPUT RENDERERS ──
-function renderAttendance() {
-  const el = document.getElementById('attendanceGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map((s, i) => {
-    const st = normAtt(attendance[s]);
-    return `<div class="att-chip ${ATT_CLASSES[st]}" onclick="cycleAtt(${i})">
-      <span class="chip-name">${s}</span>
-      <span class="att-status">${ATT_EMOJI[st]} ${ATT_LABELS[st]}</span>
-    </div>`;
-  }).join('');
-}
-
-window.cycleAtt = function(i) {
-  const s = currentStudents[i];
-  if (!s) return;
-  const now = normAtt(attendance[s]);
-  const next = ATT_STATES[(ATT_STATES.indexOf(now) + 1) % ATT_STATES.length];
-  attendance[s] = next;
-  renderAttendance();
-};
-
-function renderHomework() {
-  const el = document.getElementById('homeworkGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map((s, i) => {
-    const st = hwVal(homework[s]);
-    return `<div class="att-chip ${HW_CLASSES[st]}" onclick="cycleHomework(${i})">
-      <span class="chip-name">${s}</span>
-      <span class="att-status">${HW_EMOJI[st]} ${HW_LABELS[st]}</span>
-    </div>`;
-  }).join('');
-}
-
-window.cycleHomework = function(i) {
-  const s = currentStudents[i];
-  if (!s) return;
-  const now = hwVal(homework[s]);
-  const next = HW_STATES[(HW_STATES.indexOf(now) + 1) % HW_STATES.length];
-  homework[s] = next;
-  renderHomework();
-};
-
-function renderRatingGrid() {
-  const el = document.getElementById('ratingGrid');
-  if (!el) return;
-  el.innerHTML = currentStudents.map((s, i) => {
-    const r = Number(classRating[s] || 0);
-    return `<div class="rating-row">
-      <span class="rating-name">${s}</span>
-      <div class="rating-stars">
-        ${[1,2,3,4,5].map(n => `<button type="button" class="star-btn ${n <= r ? 'active' : ''}" onclick="setRating(${i},${n})" title="${RATING_LABELS[n]}">⭐</button>`).join('')}
-      </div>
-      <span class="rating-label" style="color:${r ? RATING_COLORS[r] : 'var(--muted)'}">${r ? r + '分' : '-'}</span>
-    </div>`;
-  }).join('');
-}
-
-window.setRating = function(i, value) {
-  const s = currentStudents[i];
-  if (!s) return;
-  classRating[s] = Number(classRating[s] || 0) === value ? 0 : value;
-  renderRatingGrid();
-};
-
 
 // ── MULTI-EXAM SYSTEM ──
 let examIdCounter = 1;
@@ -871,19 +774,6 @@ window.removeExam = function(id) {
 window.toggleExamMode = function(id, mode) {
   const ex=exams.find(e=>e.id===id);
   if(ex){ex.mode=mode;renderExams();}
-};
-
-window.updateExamRange = function(id, value) {
-  const ex = exams.find(e => e.id === id);
-  if (ex) ex.range = value;
-};
-
-window.updateExamMax = function(id, value) {
-  const ex = exams.find(e => e.id === id);
-  if (ex) {
-    ex.maxScore = parseFloat(value) || 100;
-    renderExams();
-  }
 };
 
 function renderExams() {
@@ -904,12 +794,12 @@ function renderExams() {
         <span class="exam-label">📋 考試 ${ei+1}</span>
         <input value="${ex.range||''}" placeholder="考試範圍（例：Unit 3 單字）"
           style="flex:1;min-width:140px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 10px;color:var(--text);font-family:inherit;font-size:13px;outline:none"
-          oninput="updateExamRange(${ex.id}, this.value)">
+          oninput="exams.find(e=>e.id===${ex.id}).range=this.value">
         <div style="display:flex;gap:0;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:2px">
           <button onclick="toggleExamMode(${ex.id},'score')" style="${!isGrade?'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🔢 分數</button>
           <button onclick="toggleExamMode(${ex.id},'grade')" style="${isGrade?'background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🅰 等第</button>
         </div>
-        ${!isGrade?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:11px;color:var(--muted)">滿分</span><input type="number" value="${ex.maxScore}" min="1" max="9999" style="width:58px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 6px;color:var(--text);font-family:inherit;font-size:13px;text-align:center;outline:none" oninput="updateExamMax(${ex.id}, this.value)"><span style="font-size:11px;color:var(--muted)">分</span></div>`:''}
+        ${!isGrade?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:11px;color:var(--muted)">滿分</span><input type="number" value="${ex.maxScore}" min="1" max="9999" style="width:58px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 6px;color:var(--text);font-family:inherit;font-size:13px;text-align:center;outline:none" oninput="exams.find(e=>e.id===${ex.id}).maxScore=parseFloat(this.value)||100;renderExams()"><span style="font-size:11px;color:var(--muted)">分</span></div>`:''}
         ${exams.length>1?`<button onclick="removeExam(${ex.id})" style="background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:5px 10px;color:var(--red);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">✕</button>`:''}
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -978,6 +868,7 @@ window.saveEntry = async function() {
   if (!cls)  { showToast('請選擇班級','error'); return; }
   if (!date) { showToast('請填寫日期','error'); return; }
 
+  const maxScore = parseFloat(document.getElementById('maxScore').value)||100;
   const entry = {
     teacherId:currentUser.id, teacherName:currentUser.name,
     classId:clsId, className:cls.name,
@@ -1357,7 +1248,7 @@ window.printReport = function(outputId='reportOutput') {
 
 // ── ADMIN ──
 window.adminSwitchTab = function(name, el) {
-  ['overview','entries','stats','student','schedule','classreport','promote','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
+  ['overview','entries','stats','student','alerts','schedule','classreport','promote','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
   document.querySelectorAll('#adminPage .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('admin-tab-'+name).style.display='block';
   el.classList.add('active');
@@ -1372,7 +1263,7 @@ window.adminSwitchTab = function(name, el) {
   if (name==='accounts') renderTeachers();
   if (name==='student') renderAdminStudentPick();
   if (name==='schedule') { renderScheduleEditor(); renderScheduleStatusBanner(); }
-  if (name==='classreport') populateClassReportSelect();
+  if (name==='alerts') populateAlertFilters();
   if (name==='promote') renderPromoteTab();
 };
 
@@ -1580,6 +1471,164 @@ window.adminPrintStudentReport = function() {
   const pa=document.getElementById('adminPrintArea');
   if(!pa.innerHTML){showToast('請先產生報表','error');return;}
   pa.style.display='block'; window.print(); setTimeout(()=>pa.style.display='none',1000);
+};
+
+// ── ALERT SEARCH ──
+function populateAlertFilters() {
+  const classes = [...new Set(allEntries.map(e=>e.className).filter(Boolean))].sort();
+  const names   = [...new Set(allEntries.map(e=>e.teacherName).filter(Boolean))].sort();
+  document.getElementById('alertClass').innerHTML   = '<option value="">所有班級</option>'+classes.map(c=>`<option>${c}</option>`).join('');
+  document.getElementById('alertTeacher').innerHTML = '<option value="">所有老師</option>'+names.map(n=>`<option>${n}</option>`).join('');
+  // Default dates: last 30 days
+  const today = new Date();
+  const ago30 = new Date(today); ago30.setDate(ago30.getDate()-30);
+  document.getElementById('alertEnd').value   = today.toISOString().slice(0,10);
+  document.getElementById('alertStart').value = ago30.toISOString().slice(0,10);
+}
+
+window.runAlertSearch = function() {
+  const startMMDD   = parseMMDD(document.getElementById('alertStart').value);
+  const endMMDD     = parseMMDD(document.getElementById('alertEnd').value);
+  const filterClass = document.getElementById('alertClass').value;
+  const filterTeach = document.getElementById('alertTeacher').value;
+  const checkHw     = document.getElementById('alertHw').checked;
+  const checkScore  = document.getElementById('alertScore').checked;
+  const checkAbsent = document.getElementById('alertAbsent').checked;
+  const threshold   = parseFloat(document.getElementById('alertThreshold').value)||80;
+
+  if (!checkHw && !checkScore && !checkAbsent) {
+    showToast('請至少勾選一個查詢條件','error'); return;
+  }
+
+  // Filter entries by date/class/teacher
+  const filtered = allEntries.filter(e => {
+    if (filterClass && e.className !== filterClass) return false;
+    if (filterTeach && e.teacherName !== filterTeach) return false;
+    if (startMMDD && endMMDD) {
+      const d = entryDateToMMDD(e.date);
+      if (!d || d < startMMDD || d > endMMDD) return false;
+    }
+    return true;
+  });
+
+  if (!filtered.length) {
+    document.getElementById('alertResults').innerHTML =
+      '<div style="color:var(--muted);padding:20px;text-align:center">此條件範圍內無資料</div>';
+    return;
+  }
+
+  // Collect per-student issues
+  const studentIssues = {}; // { name: { hwMiss:[], lowScore:[], absent:[] } }
+
+  filtered.forEach(e => {
+    const sts = e.students||[];
+    sts.forEach(s => {
+      if (!studentIssues[s]) studentIssues[s] = { name:s, hwMiss:[], lowScore:[], absent:[], classes:new Set() };
+      studentIssues[s].classes.add(`${e.className}（${e.teacherName||''}）`);
+
+      // Homework
+      if (checkHw) {
+        const hw = hwVal(e.homework?.[s]);
+        if (hw !== 'good') {
+          studentIssues[s].hwMiss.push({ date:e.date, class:e.className, status:HW_LABELS[hw] });
+        }
+      }
+      // Score
+      if (checkScore) {
+        const scores = getStudentScores(e, s);
+        scores.forEach(sc => {
+          if (sc.mode === 'grade') return; // skip grade mode
+          const pct = Math.round(parseFloat(sc.score)/sc.max*100);
+          if (!isNaN(pct) && pct < threshold) {
+            studentIssues[s].lowScore.push({ date:e.date, class:e.className, score:sc.score, max:sc.max, pct, range:sc.range });
+          }
+        });
+      }
+      // Absent
+      if (checkAbsent) {
+        const att = normAtt(e.attendance?.[s]);
+        if (att !== 'present') {
+          studentIssues[s].absent.push({ date:e.date, class:e.className, status:ATT_LABELS[att] });
+        }
+      }
+    });
+  });
+
+  // Filter only students with at least one issue
+  const flagged = Object.values(studentIssues).filter(s =>
+    s.hwMiss.length || s.lowScore.length || s.absent.length
+  ).sort((a,b) => {
+    // Sort by total issues desc
+    const aTotal = a.hwMiss.length + a.lowScore.length + a.absent.length;
+    const bTotal = b.hwMiss.length + b.lowScore.length + b.absent.length;
+    return bTotal - aTotal;
+  });
+
+  const outEl = document.getElementById('alertResults');
+
+  if (!flagged.length) {
+    outEl.innerHTML = `<div style="background:rgba(86,204,178,.08);border:1px solid rgba(86,204,178,.2);border-radius:12px;padding:20px;text-align:center">
+      <div style="font-size:32px;margin-bottom:8px">✅</div>
+      <div style="font-size:15px;font-weight:700;color:var(--teal)">此範圍內沒有異常記錄</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:4px">共掃描 ${filtered.length} 筆日誌</div>
+    </div>`;
+    return;
+  }
+
+  // Summary banner
+  const hwCount    = flagged.filter(s=>s.hwMiss.length).length;
+  const scoreCount = flagged.filter(s=>s.lowScore.length).length;
+  const absentCount= flagged.filter(s=>s.absent.length).length;
+
+  let html = `
+    <div style="background:rgba(255,107,107,.07);border:1px solid rgba(255,107,107,.2);border-radius:12px;padding:14px;margin-bottom:16px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
+      <span style="font-size:14px;font-weight:700;color:var(--red)">⚠️ 共 ${flagged.length} 位學生有異常</span>
+      ${checkHw    ? `<span style="font-size:13px;color:var(--yellow)">📝 作業問題：${hwCount} 人</span>` : ''}
+      ${checkScore ? `<span style="font-size:13px;color:var(--red)">📉 低於${threshold}%：${scoreCount} 人</span>` : ''}
+      ${checkAbsent? `<span style="font-size:13px;color:var(--red)">❌ 缺課：${absentCount} 人</span>` : ''}
+      <span style="font-size:12px;color:var(--muted);margin-left:auto">掃描 ${filtered.length} 筆日誌</span>
+    </div>
+
+    <div style="overflow-x:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+          <tr style="background:rgba(255,255,255,.06);">
+            <th style="padding:10px 12px;text-align:left;border:1px solid var(--border);white-space:nowrap">學生</th>
+            <th style="padding:10px 12px;text-align:left;border:1px solid var(--border)">班級</th>
+            ${checkHw    ? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--yellow)">📝 作業問題</th>` : ''}
+            ${checkScore ? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--red)">📉 低分次數</th>` : ''}
+            ${checkScore ? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--red)">最低分</th>` : ''}
+            ${checkAbsent? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--red)">❌ 缺課</th>` : ''}
+            <th style="padding:10px 12px;text-align:left;border:1px solid var(--border);color:var(--muted)">明細</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+  flagged.forEach(s => {
+    const minScore = s.lowScore.length ? Math.min(...s.lowScore.map(r=>r.pct)) : null;
+    const minColor = minScore===null?'':minScore>=60?'var(--yellow)':'var(--red)';
+
+    // Build detail string
+    const details = [];
+    s.hwMiss.forEach(r => details.push(`<span style="color:var(--yellow)">${r.date} ${r.class} ${r.status}</span>`));
+    s.lowScore.forEach(r => details.push(`<span style="color:var(--red)">${r.date} ${r.class}${r.range?' ('+r.range+')':''} ${r.pct}%</span>`));
+    s.absent.forEach(r => details.push(`<span style="color:var(--muted)">${r.date} ${r.class} ${r.status}</span>`));
+
+    html += `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:10px 12px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${s.name}</td>
+      <td style="padding:10px 12px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${[...s.classes].join('<br>')}</td>
+      ${checkHw    ? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${s.hwMiss.length?'var(--yellow)':'var(--muted)'}">${s.hwMiss.length||'—'}</td>` : ''}
+      ${checkScore ? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${s.lowScore.length?'var(--red)':'var(--muted)'}">${s.lowScore.length||'—'}</td>` : ''}
+      ${checkScore ? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${minColor}">${minScore!==null?minScore+'%':'—'}</td>` : ''}
+      ${checkAbsent? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${s.absent.length?'var(--red)':'var(--muted)'}">${s.absent.length||'—'}</td>` : ''}
+      <td style="padding:10px 12px;border:1px solid var(--border);font-size:11px;line-height:1.8">${details.join('<br>')}</td>
+    </tr>`;
+  });
+
+  html += `</tbody></table></div>`;
+
+  outEl.innerHTML = html;
+  showToast(`找到 ${flagged.length} 位學生有異常記錄`);
 };
 
 // ── SCHEDULE ──
@@ -2350,6 +2399,7 @@ window.confirmDelete= async function() {
       <button class="tab" onclick="adminSwitchTab('entries',this)">📋 所有日誌</button>
       <button class="tab" onclick="adminSwitchTab('stats',this)">📈 老師統計</button>
       <button class="tab" onclick="adminSwitchTab('student',this)">👤 學生查詢</button>
+      <button class="tab" onclick="adminSwitchTab('alerts',this)">🔎 異常查詢</button>
       <button class="tab" onclick="adminSwitchTab('schedule',this)">📅 周課表</button>
       <button class="tab" onclick="adminSwitchTab('classreport',this)">📊 班級報表</button>
       <button class="tab" onclick="adminSwitchTab('promote',this)">🎓 升班管理</button>
@@ -2408,6 +2458,59 @@ window.confirmDelete= async function() {
         <button class="btn btn-ghost" style="padding:12px 18px;" onclick="adminPrintStudentReport()">🖨 列印</button>
       </div>
       <div id="adminStudentOutput"></div>
+    </div>
+
+    <!-- ALERTS -->
+    <div id="admin-tab-alerts" style="display:none;">
+
+      <!-- Filter bar -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px;">
+        <div style="font-size:15px;font-weight:700;margin-bottom:14px;">🔎 異常查詢條件</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+          <div>
+            <label class="field-label">開始日期（選填）</label>
+            <input type="date" id="alertStart" class="field-input" style="margin-bottom:0">
+          </div>
+          <div>
+            <label class="field-label">結束日期（選填）</label>
+            <input type="date" id="alertEnd" class="field-input" style="margin-bottom:0">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+          <div>
+            <label class="field-label">班級（選填）</label>
+            <select id="alertClass" class="select-input" style="margin-bottom:0">
+              <option value="">所有班級</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">老師（選填）</label>
+            <select id="alertTeacher" class="select-input" style="margin-bottom:0">
+              <option value="">所有老師</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-bottom:14px;">
+          <label class="field-label">查詢條件（可多選）</label>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;">
+              <input type="checkbox" id="alertHw" checked style="accent-color:var(--yellow);width:16px;height:16px;"> ⚠️ 作業未完成（含部分未完成）
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;">
+              <input type="checkbox" id="alertScore" checked style="accent-color:var(--red);width:16px;height:16px;"> 📉 成績低於
+              <input type="number" id="alertThreshold" value="80" min="1" max="100"
+                style="width:56px;background:var(--surface3);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:4px 8px;color:var(--text);font-family:inherit;font-size:14px;text-align:center;outline:none"> %
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;">
+              <input type="checkbox" id="alertAbsent" style="accent-color:var(--red);width:16px;height:16px;"> ❌ 有缺課記錄
+            </label>
+          </div>
+        </div>
+        <button class="btn btn-teal" style="width:100%;padding:11px;font-size:14px;" onclick="runAlertSearch()">🔎 開始查詢</button>
+      </div>
+
+      <!-- Results -->
+      <div id="alertResults"></div>
     </div>
 
     <!-- SCHEDULE -->
