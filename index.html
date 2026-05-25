@@ -915,22 +915,23 @@ window.updateScorePct=window.updateScoreDisplay=function(){};
 window.saveEntry = async function() {
   const clsId = document.getElementById('journalClassSelect').value;
   const cls   = myClasses.find(c => c._id === clsId);
-  const date  = document.getElementById('fDate').value.trim();
+  const date  = document.getElementById('fDate')?.value.trim();
   if (!cls)  { showToast('請選擇班級','error'); return; }
   if (!date) { showToast('請填寫日期','error'); return; }
 
-  const maxScore = parseFloat(document.getElementById('maxScore').value)||100;
   const entry = {
     teacherId:currentUser.id, teacherName:currentUser.name,
     classId:clsId, className:cls.name,
-    date, weekday:document.getElementById('fWeekday').value,
+    date,
+    weekday: document.getElementById('fWeekday')?.value||'',
     students:[...currentStudents],
     attendance:{...attendance}, homework:{...homework},
-    exams:exams.map(ex=>({...ex, scores:{...ex.scores}})), classRating:{...classRating},
-    todayProgress:document.getElementById('fProgress').value,
-    todayHomework:document.getElementById('fHomework').value,
-    nextExam:document.getElementById('fNextExam').value,
-    notes:document.getElementById('fNotes').value,
+    exams:exams.map(ex=>({...ex, scores:{...ex.scores}})),
+    classRating:{...classRating},
+    todayProgress: document.getElementById('fProgress')?.value||'',
+    todayHomework: document.getElementById('fHomework')?.value||'',
+    nextExam:      document.getElementById('fNextExam')?.value||'',
+    notes:         document.getElementById('fNotes')?.value||'',
     savedAt:Date.now()
   };
 
@@ -1027,12 +1028,13 @@ window.editEntry = function(i) {
     examIdCounter=exams.length;
     renderExams();
   }
-  document.getElementById('fDate').value     = e.date||'';
-  document.getElementById('fWeekday').value  = e.weekday||'';
-  document.getElementById('fProgress').value = e.todayProgress||'';
-  document.getElementById('fHomework').value = e.todayHomework||'';
-  document.getElementById('fNextExam').value = e.nextExam||'';
-  document.getElementById('fNotes').value    = e.notes||'';
+  const setVal = (id, val) => { const el=document.getElementById(id); if(el) el.value=val||''; };
+  setVal('fDate',       e.date);
+  setVal('fWeekday',    e.weekday);
+  setVal('fProgress',   e.todayProgress);
+  setVal('fHomework',   e.todayHomework);
+  setVal('fNextExam',   e.nextExam);
+  setVal('fNotes',      e.notes);
   document.querySelectorAll('#appPage .tab')[0].click();
   window.scrollTo(0,0);
 };
