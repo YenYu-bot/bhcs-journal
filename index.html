@@ -1474,19 +1474,22 @@ window.adminPrintStudentReport = function() {
 };
 
 // ── ALERT SEARCH ──
+// ── ALERT SEARCH ──
+let _alertResults = []; // cached for export
+let _alertParams  = {};
+
 function populateAlertFilters() {
   const classes = [...new Set(allEntries.map(e=>e.className).filter(Boolean))].sort();
   const names   = [...new Set(allEntries.map(e=>e.teacherName).filter(Boolean))].sort();
   document.getElementById('alertClass').innerHTML   = '<option value="">所有班級</option>'+classes.map(c=>`<option>${c}</option>`).join('');
   document.getElementById('alertTeacher').innerHTML = '<option value="">所有老師</option>'+names.map(n=>`<option>${n}</option>`).join('');
-  // Default dates: last 30 days
   const today = new Date();
   const ago30 = new Date(today); ago30.setDate(ago30.getDate()-30);
   document.getElementById('alertEnd').value   = today.toISOString().slice(0,10);
   document.getElementById('alertStart').value = ago30.toISOString().slice(0,10);
 }
 
-window.runAlertSearch = function() {
+function collectAlertData() {
   const startMMDD   = parseMMDD(document.getElementById('alertStart').value);
   const endMMDD     = parseMMDD(document.getElementById('alertEnd').value);
   const filterClass = document.getElementById('alertClass').value;
@@ -1496,11 +1499,10 @@ window.runAlertSearch = function() {
   const checkAbsent = document.getElementById('alertAbsent').checked;
   const threshold   = parseFloat(document.getElementById('alertThreshold').value)||80;
 
-  if (!checkHw && !checkScore && !checkAbsent) {
-    showToast('請至少勾選一個查詢條件','error'); return;
-  }
+  _alertParams = { startMMDD, endMMDD, filterClass, filterTeach, checkHw, checkScore, checkAbsent, threshold,
+    startStr: document.getElementById('alertStart').value,
+    endStr:   document.getElementById('alertEnd').value };
 
-  // Filter entries by date/class/teacher
   const filtered = allEntries.filter(e => {
     if (filterClass && e.className !== filterClass) return false;
     if (filterTeach && e.teacherName !== filterTeach) return false;
@@ -1511,71 +1513,59 @@ window.runAlertSearch = function() {
     return true;
   });
 
-  if (!filtered.length) {
-    document.getElementById('alertResults').innerHTML =
-      '<div style="color:var(--muted);padding:20px;text-align:center">此條件範圍內無資料</div>';
-    return;
-  }
-
-  // Collect per-student issues
-  const studentIssues = {}; // { name: { hwMiss:[], lowScore:[], absent:[] } }
-
+  const studentIssues = {};
   filtered.forEach(e => {
     const sts = e.students||[];
     sts.forEach(s => {
       if (!studentIssues[s]) studentIssues[s] = { name:s, hwMiss:[], lowScore:[], absent:[], classes:new Set() };
       studentIssues[s].classes.add(`${e.className}（${e.teacherName||''}）`);
-
-      // Homework
       if (checkHw) {
         const hw = hwVal(e.homework?.[s]);
-        if (hw !== 'good') {
-          studentIssues[s].hwMiss.push({ date:e.date, class:e.className, status:HW_LABELS[hw] });
-        }
+        if (hw !== 'good') studentIssues[s].hwMiss.push({ date:e.date, class:e.className, status:HW_LABELS[hw] });
       }
-      // Score
       if (checkScore) {
-        const scores = getStudentScores(e, s);
-        scores.forEach(sc => {
-          if (sc.mode === 'grade') return; // skip grade mode
+        getStudentScores(e, s).forEach(sc => {
+          if (sc.mode === 'grade') return;
           const pct = Math.round(parseFloat(sc.score)/sc.max*100);
-          if (!isNaN(pct) && pct < threshold) {
+          if (!isNaN(pct) && pct < threshold)
             studentIssues[s].lowScore.push({ date:e.date, class:e.className, score:sc.score, max:sc.max, pct, range:sc.range });
-          }
         });
       }
-      // Absent
       if (checkAbsent) {
         const att = normAtt(e.attendance?.[s]);
-        if (att !== 'present') {
-          studentIssues[s].absent.push({ date:e.date, class:e.className, status:ATT_LABELS[att] });
-        }
+        if (att !== 'present') studentIssues[s].absent.push({ date:e.date, class:e.className, status:ATT_LABELS[att] });
       }
     });
   });
 
-  // Filter only students with at least one issue
-  const flagged = Object.values(studentIssues).filter(s =>
-    s.hwMiss.length || s.lowScore.length || s.absent.length
-  ).sort((a,b) => {
-    // Sort by total issues desc
-    const aTotal = a.hwMiss.length + a.lowScore.length + a.absent.length;
-    const bTotal = b.hwMiss.length + b.lowScore.length + b.absent.length;
-    return bTotal - aTotal;
-  });
+  _alertResults = Object.values(studentIssues)
+    .filter(s => s.hwMiss.length || s.lowScore.length || s.absent.length)
+    .sort((a,b) => (b.hwMiss.length+b.lowScore.length+b.absent.length) - (a.hwMiss.length+a.lowScore.length+a.absent.length));
 
+  return { flagged: _alertResults, total: filtered.length };
+}
+
+window.runAlertSearch = function() {
+  const { checkHw, checkScore, checkAbsent, threshold } = _alertParams;
+  if (!document.getElementById('alertHw').checked &&
+      !document.getElementById('alertScore').checked &&
+      !document.getElementById('alertAbsent').checked) {
+    showToast('請至少勾選一個查詢條件','error'); return;
+  }
+
+  const { flagged, total } = collectAlertData();
+  const p = _alertParams;
   const outEl = document.getElementById('alertResults');
 
   if (!flagged.length) {
     outEl.innerHTML = `<div style="background:rgba(86,204,178,.08);border:1px solid rgba(86,204,178,.2);border-radius:12px;padding:20px;text-align:center">
       <div style="font-size:32px;margin-bottom:8px">✅</div>
       <div style="font-size:15px;font-weight:700;color:var(--teal)">此範圍內沒有異常記錄</div>
-      <div style="font-size:13px;color:var(--muted);margin-top:4px">共掃描 ${filtered.length} 筆日誌</div>
+      <div style="font-size:13px;color:var(--muted);margin-top:4px">共掃描 ${total} 筆日誌</div>
     </div>`;
     return;
   }
 
-  // Summary banner
   const hwCount    = flagged.filter(s=>s.hwMiss.length).length;
   const scoreCount = flagged.filter(s=>s.lowScore.length).length;
   const absentCount= flagged.filter(s=>s.absent.length).length;
@@ -1583,54 +1573,99 @@ window.runAlertSearch = function() {
   let html = `
     <div style="background:rgba(255,107,107,.07);border:1px solid rgba(255,107,107,.2);border-radius:12px;padding:14px;margin-bottom:16px;display:flex;gap:20px;flex-wrap:wrap;align-items:center;">
       <span style="font-size:14px;font-weight:700;color:var(--red)">⚠️ 共 ${flagged.length} 位學生有異常</span>
-      ${checkHw    ? `<span style="font-size:13px;color:var(--yellow)">📝 作業問題：${hwCount} 人</span>` : ''}
-      ${checkScore ? `<span style="font-size:13px;color:var(--red)">📉 低於${threshold}%：${scoreCount} 人</span>` : ''}
-      ${checkAbsent? `<span style="font-size:13px;color:var(--red)">❌ 缺課：${absentCount} 人</span>` : ''}
-      <span style="font-size:12px;color:var(--muted);margin-left:auto">掃描 ${filtered.length} 筆日誌</span>
+      ${p.checkHw    ? `<span style="font-size:13px;color:var(--yellow)">📝 作業問題：${hwCount} 人</span>` : ''}
+      ${p.checkScore ? `<span style="font-size:13px;color:var(--red)">📉 低於${p.threshold}%：${scoreCount} 人</span>` : ''}
+      ${p.checkAbsent? `<span style="font-size:13px;color:var(--red)">❌ 缺課：${absentCount} 人</span>` : ''}
+      <span style="font-size:12px;color:var(--muted);margin-left:auto">掃描 ${total} 筆</span>
     </div>
-
     <div style="overflow-x:auto;">
       <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead>
-          <tr style="background:rgba(255,255,255,.06);">
-            <th style="padding:10px 12px;text-align:left;border:1px solid var(--border);white-space:nowrap">學生</th>
-            <th style="padding:10px 12px;text-align:left;border:1px solid var(--border)">班級</th>
-            ${checkHw    ? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--yellow)">📝 作業問題</th>` : ''}
-            ${checkScore ? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--red)">📉 低分次數</th>` : ''}
-            ${checkScore ? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--red)">最低分</th>` : ''}
-            ${checkAbsent? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--red)">❌ 缺課</th>` : ''}
-            <th style="padding:10px 12px;text-align:left;border:1px solid var(--border);color:var(--muted)">明細</th>
-          </tr>
-        </thead>
-        <tbody>`;
+        <thead><tr style="background:rgba(255,255,255,.06);">
+          <th style="padding:10px 12px;text-align:left;border:1px solid var(--border)">學生</th>
+          <th style="padding:10px 12px;text-align:left;border:1px solid var(--border)">班級</th>
+          ${p.checkHw    ? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--yellow)">📝 作業問題</th>` : ''}
+          ${p.checkScore ? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--red)">📉 低分次數</th><th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--red)">最低分</th>` : ''}
+          ${p.checkAbsent? `<th style="padding:10px 12px;text-align:center;border:1px solid var(--border);color:var(--red)">❌ 缺課</th>` : ''}
+          <th style="padding:10px 12px;text-align:left;border:1px solid var(--border);color:var(--muted)">明細</th>
+        </tr></thead><tbody>`;
 
   flagged.forEach(s => {
     const minScore = s.lowScore.length ? Math.min(...s.lowScore.map(r=>r.pct)) : null;
-    const minColor = minScore===null?'':minScore>=60?'var(--yellow)':'var(--red)';
-
-    // Build detail string
-    const details = [];
-    s.hwMiss.forEach(r => details.push(`<span style="color:var(--yellow)">${r.date} ${r.class} ${r.status}</span>`));
-    s.lowScore.forEach(r => details.push(`<span style="color:var(--red)">${r.date} ${r.class}${r.range?' ('+r.range+')':''} ${r.pct}%</span>`));
-    s.absent.forEach(r => details.push(`<span style="color:var(--muted)">${r.date} ${r.class} ${r.status}</span>`));
-
-    html += `<tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:10px 12px;border:1px solid var(--border);font-weight:700;white-space:nowrap">${s.name}</td>
+    const details = [
+      ...s.hwMiss.map(r=>`<span style="color:var(--yellow)">${r.date} ${r.class} ${r.status}</span>`),
+      ...s.lowScore.map(r=>`<span style="color:var(--red)">${r.date} ${r.class}${r.range?' ('+r.range+')':''} ${r.pct}%</span>`),
+      ...s.absent.map(r=>`<span style="color:var(--muted)">${r.date} ${r.class} ${r.status}</span>`)
+    ];
+    html += `<tr>
+      <td style="padding:10px 12px;border:1px solid var(--border);font-weight:700">${s.name}</td>
       <td style="padding:10px 12px;border:1px solid var(--border);font-size:12px;color:var(--muted)">${[...s.classes].join('<br>')}</td>
-      ${checkHw    ? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${s.hwMiss.length?'var(--yellow)':'var(--muted)'}">${s.hwMiss.length||'—'}</td>` : ''}
-      ${checkScore ? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${s.lowScore.length?'var(--red)':'var(--muted)'}">${s.lowScore.length||'—'}</td>` : ''}
-      ${checkScore ? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${minColor}">${minScore!==null?minScore+'%':'—'}</td>` : ''}
-      ${checkAbsent? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${s.absent.length?'var(--red)':'var(--muted)'}">${s.absent.length||'—'}</td>` : ''}
-      <td style="padding:10px 12px;border:1px solid var(--border);font-size:11px;line-height:1.8">${details.join('<br>')}</td>
+      ${p.checkHw    ? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${s.hwMiss.length?'var(--yellow)':'var(--muted)'}">${s.hwMiss.length||'—'}</td>` : ''}
+      ${p.checkScore ? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${s.lowScore.length?'var(--red)':'var(--muted)'}">${s.lowScore.length||'—'}</td>
+        <td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${minScore!==null?(minScore>=60?'var(--yellow)':'var(--red)'):'var(--muted)'}">${minScore!==null?minScore+'%':'—'}</td>` : ''}
+      ${p.checkAbsent? `<td style="padding:10px 12px;border:1px solid var(--border);text-align:center;font-weight:700;color:${s.absent.length?'var(--red)':'var(--muted)'}">${s.absent.length||'—'}</td>` : ''}
+      <td style="padding:10px 12px;border:1px solid var(--border);font-size:11px;line-height:2">${details.join('<br>')}</td>
     </tr>`;
   });
 
   html += `</tbody></table></div>`;
-
   outEl.innerHTML = html;
   showToast(`找到 ${flagged.length} 位學生有異常記錄`);
 };
 
+window.exportAlertCSV = function() {
+  if (!_alertResults.length) { runAlertSearch(); }
+  const { flagged, total } = collectAlertData();
+  if (!flagged.length) { showToast('沒有資料可以匯出','error'); return; }
+
+  const p = _alertParams;
+  const rows = [];
+
+  // Header
+  const headers = ['學生','班級'];
+  if (p.checkHw)     headers.push('作業問題次數','作業明細');
+  if (p.checkScore)  headers.push('低分次數',`最低分(%)`,'成績明細');
+  if (p.checkAbsent) headers.push('缺課次數','缺課明細');
+  rows.push(headers);
+
+  flagged.forEach(s => {
+    const minScore = s.lowScore.length ? Math.min(...s.lowScore.map(r=>r.pct)) : '';
+    const row = [
+      s.name,
+      [...s.classes].join(' / ')
+    ];
+    if (p.checkHw) {
+      row.push(s.hwMiss.length || 0);
+      row.push(s.hwMiss.map(r=>`${r.date} ${r.class} ${r.status}`).join(' | '));
+    }
+    if (p.checkScore) {
+      row.push(s.lowScore.length || 0);
+      row.push(minScore!==''?minScore+'%':'');
+      row.push(s.lowScore.map(r=>`${r.date} ${r.class}${r.range?' ('+r.range+')':''} ${r.pct}%`).join(' | '));
+    }
+    if (p.checkAbsent) {
+      row.push(s.absent.length || 0);
+      row.push(s.absent.map(r=>`${r.date} ${r.class} ${r.status}`).join(' | '));
+    }
+    rows.push(row);
+  });
+
+  // Convert to CSV with BOM for Excel Chinese support
+  const csv = '\uFEFF' + rows.map(r =>
+    r.map(cell => `"${String(cell).replace(/"/g,'""')}"`).join(',')
+  ).join('\n');
+
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const dateStr = `${p.startStr||''}${p.startStr&&p.endStr?'_':''}${p.endStr||''}`;
+  a.href = url;
+  a.download = `異常學生清單_${dateStr}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('✅ CSV 已下載');
+};
 // ── SCHEDULE ──
 const WEEKDAYS_LIST = ['一','二','三','四','五','六','日'];
 let schedule = {}; // { teacherId: ['一','三','五', ...] }
@@ -2506,7 +2541,10 @@ window.confirmDelete= async function() {
             </label>
           </div>
         </div>
-        <button class="btn btn-teal" style="width:100%;padding:11px;font-size:14px;" onclick="runAlertSearch()">🔎 開始查詢</button>
+        <div style="display:flex;gap:10px;">
+          <button class="btn btn-teal" style="flex:1;padding:11px;font-size:14px;" onclick="runAlertSearch()">🔎 開始查詢</button>
+          <button class="btn btn-ghost" style="padding:11px 18px;" onclick="exportAlertCSV()">⬇️ 匯出 CSV</button>
+        </div>
       </div>
 
       <!-- Results -->
