@@ -643,9 +643,13 @@ function refreshClassSelect() {
   if (!sel) return;
   sel.innerHTML = '<option value="">-- 請選擇班級 --</option>' +
     myClasses.map(c => `<option value="${c._id}">${c.name}（${c.students.length}人）</option>`).join('');
-  // If only one class, pre-select it so user just needs to confirm
+  // If only one class, auto-select and trigger form after DOM settles
   if (myClasses.length === 1) {
     sel.value = myClasses[0]._id;
+    setTimeout(() => {
+      _lastSelectedClassId = null;
+      onClassSelect();
+    }, 150);
   }
 }
 
