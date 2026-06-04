@@ -854,7 +854,7 @@ function renderExams() {
           <button onclick="toggleExamMode(${ex.id},'score')" style="${!isGrade?'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🔢 分數</button>
           <button onclick="toggleExamMode(${ex.id},'grade')" style="${isGrade?'background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff;':'background:none;color:var(--muted);'}padding:5px 10px;border:none;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">🅰 等第</button>
         </div>
-        ${!isGrade?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:11px;color:var(--muted)">滿分</span><input type="number" value="${ex.maxScore}" min="1" max="9999" style="width:72px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;color:var(--text);font-family:inherit;font-size:13px;text-align:center;outline:none" onchange="const ex=exams.find(e=>e.id===${ex.id});ex.maxScore=parseFloat(this.value)||100;const hdr=document.getElementById('exhdr_'+${ex.id});if(hdr)hdr.textContent='成績（/'+ex.maxScore+'）';refreshExamPcts(${ex.id})"><span style="font-size:11px;color:var(--muted)">分</span></div>`:''}
+        ${!isGrade?`<div style="display:flex;align-items:center;gap:4px"><span style="font-size:11px;color:var(--muted)">滿分</span><input type="number" id="exmax_${ex.id}" value="${ex.maxScore}" min="1" max="9999" style="width:72px;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:5px 8px;color:var(--text);font-family:inherit;font-size:13px;text-align:center;outline:none" oninput="onExMaxChange(${ex.id})"><span style="font-size:11px;color:var(--muted)">分</span></div>`:''}
         ${exams.length>1?`<button onclick="removeExam(${ex.id})" style="background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:5px 10px;color:var(--red);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">✕</button>`:''}
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -868,19 +868,26 @@ function renderExams() {
   }).join('');
 }
 
-function refreshExamPcts(examId) {
+window.onExMaxChange = function(examId) {
+  const maxEl = document.getElementById('exmax_'+examId);
   const ex = exams.find(e=>e.id===examId);
-  if (!ex || ex.mode==='grade') return;
+  if (!maxEl || !ex) return;
+  const newMax = parseFloat(maxEl.value) || 100;
+  ex.maxScore = newMax;
+  // Update header text
+  const hdr = document.getElementById('exhdr_'+examId);
+  if (hdr) hdr.textContent = '成績（/'+newMax+'）';
+  // Update all score percentages without re-render
   currentStudents.forEach((s,si) => {
     const el  = document.getElementById(`ex_${examId}_${si}`);
     const out = document.getElementById(`ex_disp_${examId}_${si}`);
     if (!el || !out || !el.value) return;
-    const pct = Math.round(parseFloat(el.value)/ex.maxScore*100);
+    const pct = Math.round(parseFloat(el.value)/newMax*100);
     if (isNaN(pct)) return;
     out.textContent = pct+'%';
     out.style.color = pct>=90?'var(--teal)':pct>=60?'var(--yellow)':'var(--red)';
   });
-}
+};
 
 window.updateExamScore = function(examId, si) {
   const ex=exams.find(e=>e.id===examId);
