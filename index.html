@@ -823,11 +823,11 @@ window.addExam = function() {
 };
 window.removeExam = function(id) {
   if (exams.length<=1){showToast('至少保留一筆考試記錄','error');return;}
-  exams = exams.filter(e=>e.id!==id);
+  exams = exams.filter(e=>e.id!=id);
   renderExams();
 };
 window.toggleExamMode = function(id, mode) {
-  const ex=exams.find(e=>e.id===id);
+  const ex=exams.find(e=>e.id==id);
   if(ex){ex.mode=mode;renderExams();}
 };
 
@@ -870,7 +870,7 @@ function renderExams() {
 
 window.onExMaxChange = function(examId) {
   const maxEl = document.getElementById('exmax_'+examId);
-  const ex = exams.find(e=>e.id===examId);
+  const ex = exams.find(e=>e.id==examId); // == not === to handle string/number
   if (!maxEl || !ex) return;
   const newMax = parseFloat(maxEl.value) || 100;
   ex.maxScore = newMax;
@@ -890,7 +890,7 @@ window.onExMaxChange = function(examId) {
 };
 
 window.updateExamScore = function(examId, si) {
-  const ex=exams.find(e=>e.id===examId);
+  const ex=exams.find(e=>e.id==examId);
   const el=document.getElementById(`ex_${examId}_${si}`);
   const out=document.getElementById(`ex_disp_${examId}_${si}`);
   if(!ex||!el||!out)return;
