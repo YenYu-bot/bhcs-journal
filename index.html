@@ -278,6 +278,17 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
       <button class="tab" onclick="switchTab('classes',this)">🏫 班級管理</button>
       <button class="tab" onclick="switchTab('history',this)">📋 歷史記錄</button>
       <button class="tab" onclick="switchTab('report',this)">📊 報表</button>
+      <button class="tab" onclick="switchTab('tasks',this)">📸 抽查任務</button>
+    </div>
+
+    <!-- TASKS (teacher) -->
+    <div id="tab-tasks" style="display:none;">
+      <div style="background:rgba(86,204,178,.07);border:1px solid rgba(86,204,178,.2);border-radius:var(--radius);padding:14px;margin-bottom:14px;">
+        <div style="font-size:13px;color:var(--muted);line-height:1.6">
+          <strong style="color:var(--teal)">作業抽查：</strong>主管派遣的抽查任務會顯示在這裡。點「📷 上傳作業」選擇班級後即可拍照上傳，手機會直接開啟相機。
+        </div>
+      </div>
+      <div id="teacherTaskList"></div>
     </div>
 
     <!-- JOURNAL -->
@@ -620,13 +631,14 @@ function showPage(page) {
 
 // ── TEACHER TABS ──
 window.switchTab = function(name, el) {
-  ['journal','classes','history','report'].forEach(t => document.getElementById('tab-'+t).style.display = 'none');
+  ['journal','classes','history','report','tasks'].forEach(t => document.getElementById('tab-'+t).style.display = 'none');
   document.querySelectorAll('#appPage .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('tab-'+name).style.display = 'block';
   el.classList.add('active');
   if (name === 'classes') renderClassList();
   if (name === 'history') { loadEntries().then(renderHistory); }
   if (name === 'report')  { loadEntries().then(() => { renderReportClassList(); renderStudentQuickPick(); }); }
+  if (name === 'tasks')   renderTeacherTasks();
 };
 
 // ── CLASS MANAGEMENT ──
@@ -1331,7 +1343,7 @@ window.printReport = function(outputId='reportOutput') {
 
 // ── ADMIN ──
 window.adminSwitchTab = function(name, el) {
-  ['overview','entries','stats','student','alerts','schedule','classreport','promote','accounts'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
+  ['overview','entries','stats','student','alerts','schedule','classreport','promote','accounts','tasks'].forEach(t => document.getElementById('admin-tab-'+t).style.display='none');
   document.querySelectorAll('#adminPage .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('admin-tab-'+name).style.display='block';
   el.classList.add('active');
@@ -1349,6 +1361,7 @@ window.adminSwitchTab = function(name, el) {
   if (name==='alerts') populateAlertFilters();
   if (name==='classreport') populateClassReportSelect();
   if (name==='promote') renderPromoteTab();
+  if (name==='tasks')   renderAdminTasks();
 };
 
 async function adminLoadAll() {
@@ -1882,8 +1895,11 @@ window.saveSchedule = async function() {
 };
 
 function renderScheduleStatusBanner() {
-  const banner = document.getElementById('scheduleStatusBanner');
-  if (!banner) return;
+  // 兩個位置共用同一份內容：總覽頁 + 周課表頁
+  const banners = ['scheduleStatusBanner','scheduleStatusBanner2']
+    .map(id => document.getElementById(id)).filter(Boolean);
+  if (!banners.length) return;
+  const banner = { set innerHTML(v) { banners.forEach(b => b.innerHTML = v); } };
   const now     = new Date();
   const todayWD = WEEKDAYS_LIST[now.getDay()===0 ? 6 : now.getDay()-1]; // 一~日
   const mm      = String(now.getMonth()+1).padStart(2,'0');
@@ -2494,11 +2510,542 @@ window.promptDelete = function(id,name) {
 window.closeModal   = function() { document.getElementById('deleteModal').classList.remove('show'); deleteTargetId=null; };
 window.confirmDelete= async function() {
   if (!deleteTargetId) return;
+  const targetId = deleteTargetId;   // ★ 先存起來，closeModal() 會把 deleteTargetId 清成 null
   closeModal();
   showLoading('刪除中...');
-  try { await deleteDoc(doc(db,'teachers',deleteTargetId)); teachers=teachers.filter(t=>t._id!==deleteTargetId); renderTeachers(); showToast('🗑 帳號已刪除'); }
-  catch(e) { showToast('❌ 刪除失敗','error'); }
+  try { await deleteDoc(doc(db,'teachers',targetId)); teachers=teachers.filter(t=>t._id!==targetId); renderTeachers(); showToast('🗑 帳號已刪除'); }
+  catch(e) { console.error(e); showToast('❌ 刪除失敗：'+e.message,'error'); }
   hideLoading(); deleteTargetId=null;
+};
+
+// ══════════════════════════════════════════════════════════════
+// 📸 任務派遣 / 作業抽查 (TASK DISPATCH)
+// ══════════════════════════════════════════════════════════════
+// Firestore collections used by this module:
+//   tasks           - admin 派遣的抽查任務
+//   taskSubs        - 老師的繳交記錄 (一位老師 x 一個任務 x 一個班級 = 一筆)
+//   taskPhotos      - 照片本體 (PHOTO_BACKEND='firestore' 時才使用)
+// ──────────────────────────────────────────────────────────────
+
+// ── 照片儲存設定 ──────────────────────────────────────────────
+// 'firestore'  : 壓縮後存進 Firestore（零設定、免信用卡；免費額度 1GiB ≈ 8000 張）
+// 'cloudinary' : 存到 Cloudinary（免費 25GB；需先建立 unsigned upload preset）
+const PHOTO_BACKEND     = 'firestore';
+const CLOUDINARY_CLOUD  = '';            // 例：'dxxxxxx'
+const CLOUDINARY_PRESET = '';            // 例：'bhcs_unsigned'
+const PHOTO_MAX_EDGE    = 1400;          // 壓縮後最長邊 (px)
+const PHOTO_QUALITY     = 0.72;          // JPEG 品質
+const PHOTO_DOC_LIMIT   = 900 * 1024;    // Firestore 單筆文件安全上限
+
+// ── 工具：HTML escape（防止學生/班級名稱中的特殊字元破版或注入）──
+function esc(v) {
+  return String(v==null?'':v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+window.esc = esc;
+
+// ── State ──
+let allTasks       = [];   // admin: 所有任務
+let myTasks        = [];   // teacher: 指派給我的任務
+let taskSubsCache  = {};   // { taskId: [sub,...] }
+let taskPhotoCache = {};   // { photoDocId: dataUrl }
+let activeTaskId   = null; // 老師端目前展開的任務
+let pendingPhotos  = [];   // [{dataUrl, size}] 尚未送出的照片
+let adminOpenTaskId= null; // admin 端目前展開的任務
+
+const TASK_STATUS_LABEL = { open:'進行中', closed:'已結束' };
+const SUB_STATUS = {
+  submitted: { label:'待審核', color:'var(--yellow)', bg:'rgba(255,209,102,.15)' },
+  approved:  { label:'已通過', color:'var(--teal)',   bg:'rgba(86,204,178,.15)' },
+  rejected:  { label:'需補件', color:'var(--red)',    bg:'rgba(255,107,107,.15)' }
+};
+
+// ── 工具：日期 ──
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function isOverdue(task) {
+  return task.dueDate && task.dueDate < todayISO() && task.status !== 'closed';
+}
+
+// ── 工具：圖片壓縮 ──
+function compressImage(file, maxEdge = PHOTO_MAX_EDGE, quality = PHOTO_QUALITY) {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) { reject(new Error('請選擇圖片檔')); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      let w = img.naturalWidth, h = img.naturalHeight;
+      const scale = Math.min(1, maxEdge / Math.max(w, h));
+      w = Math.max(1, Math.round(w * scale));
+      h = Math.max(1, Math.round(h * scale));
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);   // 避免 PNG 透明變黑
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+
+      // 若超過 Firestore 單筆上限則逐步降畫質
+      let q = quality, out = cv.toDataURL('image/jpeg', q);
+      while (PHOTO_BACKEND === 'firestore' && out.length > PHOTO_DOC_LIMIT && q > 0.3) {
+        q -= 0.12;
+        out = cv.toDataURL('image/jpeg', q);
+      }
+      if (PHOTO_BACKEND === 'firestore' && out.length > PHOTO_DOC_LIMIT) {
+        reject(new Error('照片太大，請重新拍攝或裁切')); return;
+      }
+      resolve(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('圖片讀取失敗')); };
+    img.src = url;
+  });
+}
+
+// ── 工具：上傳單張照片，回傳 photo ref ──
+async function uploadPhoto(dataUrl, meta) {
+  if (PHOTO_BACKEND === 'cloudinary') {
+    if (!CLOUDINARY_CLOUD || !CLOUDINARY_PRESET) throw new Error('尚未設定 Cloudinary');
+    const fd = new FormData();
+    fd.append('file', dataUrl);
+    fd.append('upload_preset', CLOUDINARY_PRESET);
+    const r = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`, { method:'POST', body:fd });
+    const j = await r.json();
+    if (!j.secure_url) throw new Error(j.error?.message || '雲端上傳失敗');
+    return { kind:'url', url:j.secure_url };
+  }
+  const ref = await addDoc(collection(db, 'taskPhotos'), { ...meta, data:dataUrl, createdAt:Date.now() });
+  taskPhotoCache[ref.id] = dataUrl;
+  return { kind:'doc', id:ref.id };
+}
+
+// ── 工具：取得照片可顯示的 src ──
+async function resolvePhotoSrc(p) {
+  if (p.kind === 'url') return p.url;
+  if (taskPhotoCache[p.id]) return taskPhotoCache[p.id];
+  return null;   // 需由 loadTaskPhotos() 批次載入
+}
+
+async function loadTaskPhotos(taskId) {
+  try {
+    const snap = await getDocs(query(collection(db,'taskPhotos'), where('taskId','==',taskId)));
+    snap.docs.forEach(d => { taskPhotoCache[d.id] = d.data().data; });
+  } catch(e) { console.error('loadTaskPhotos:', e); }
+}
+
+// ── 資料載入 ──
+async function loadTasks() {
+  try {
+    const snap = await getDocs(collection(db,'tasks'));
+    allTasks = snap.docs.map(d => ({_id:d.id, ...d.data()}))
+      .sort((a,b) => (b.createdAt||0)-(a.createdAt||0));
+  } catch(e) { console.error('loadTasks:', e); allTasks = []; }
+}
+
+async function loadTaskSubs(taskId) {
+  try {
+    const snap = await getDocs(query(collection(db,'taskSubs'), where('taskId','==',taskId)));
+    taskSubsCache[taskId] = snap.docs.map(d => ({_id:d.id, ...d.data()}));
+  } catch(e) { console.error('loadTaskSubs:', e); taskSubsCache[taskId] = []; }
+  return taskSubsCache[taskId];
+}
+
+async function loadMySubs() {
+  try {
+    const snap = await getDocs(query(collection(db,'taskSubs'), where('teacherId','==',currentUser.id)));
+    const list = snap.docs.map(d => ({_id:d.id, ...d.data()}));
+    taskSubsCache._mine = list;
+    return list;
+  } catch(e) { console.error('loadMySubs:', e); taskSubsCache._mine = []; return []; }
+}
+
+function mySubsFor(taskId) {
+  return (taskSubsCache._mine || []).filter(s => s.taskId === taskId);
+}
+
+// ══════════════════════════════════════════════════════════════
+// 老師端
+// ══════════════════════════════════════════════════════════════
+window.renderTeacherTasks = async function() {
+  const el = document.getElementById('teacherTaskList');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px 0">載入中...</div>';
+
+  await loadTasks();
+  await loadMySubs();
+
+  myTasks = allTasks.filter(t =>
+    t.status !== 'closed' &&
+    (!t.assignees || !t.assignees.length || t.assignees.includes(currentUser.id))
+  );
+
+  if (!myTasks.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">📸</div><div>目前沒有待辦的抽查任務</div></div>';
+    return;
+  }
+
+  el.innerHTML = myTasks.map(t => {
+    const subs   = mySubsFor(t._id);
+    const photos = subs.reduce((a,s) => a + (s.photos?.length||0), 0);
+    const need   = t.minPhotos || 1;
+    const done   = photos >= need;
+    const rejected = subs.some(s => s.status === 'rejected');
+    const over   = isOverdue(t);
+    const color  = rejected ? 'var(--red)' : done ? 'var(--teal)' : over ? 'var(--red)' : 'var(--yellow)';
+    const state  = rejected ? '❗ 需補件' : done ? '✅ 已繳交' : over ? '⏰ 已逾期' : '📥 待繳交';
+    return `
+    <div class="card" style="border-left:3px solid ${color}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:15px;font-weight:700;margin-bottom:4px">${esc(t.title)}</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.6">
+            ${t.dueDate ? `截止：${t.dueDate}　` : ''}需上傳 ${need} 張　已上傳 ${photos} 張
+          </div>
+          ${t.desc ? `<div style="font-size:13px;color:var(--text);margin-top:8px;white-space:pre-wrap;opacity:.85">${esc(t.desc)}</div>` : ''}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+          <span class="badge" style="background:${color}22;color:${color};border:1px solid ${color}55">${state}</span>
+          <button class="btn btn-teal btn-sm" onclick="openTaskUpload('${t._id}')">📷 上傳作業</button>
+        </div>
+      </div>
+      ${subs.length ? `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+        ${subs.map(s => {
+          const st = SUB_STATUS[s.status] || SUB_STATUS.submitted;
+          return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;font-size:12px;flex-wrap:wrap">
+            <span style="color:var(--muted)">${esc(s.className||'—')}${s.studentName?' · '+esc(s.studentName):''}　${s.photos?.length||0} 張</span>
+            <span style="background:${st.bg};color:${st.color};border-radius:20px;padding:2px 10px;font-weight:700">${st.label}</span>
+          </div>${s.reviewNote ? `<div style="font-size:12px;color:var(--red);padding-bottom:6px">主管備註：${esc(s.reviewNote)}</div>` : ''}`;
+        }).join('')}
+      </div>` : ''}
+    </div>`;
+  }).join('') + `<div id="taskUploadPanel" style="display:none"></div>`;
+};
+
+window.openTaskUpload = function(taskId) {
+  activeTaskId  = taskId;
+  pendingPhotos = [];
+  const t = allTasks.find(x => x._id === taskId);
+  if (!t) return;
+  const panel = document.getElementById('taskUploadPanel');
+  panel.style.display = 'block';
+  panel.innerHTML = `
+    <div class="card" style="border:1px solid var(--teal);background:rgba(86,204,178,.05)">
+      <div class="card-title">📷 上傳作業照片 — ${esc(t.title)}</div>
+      ${t.desc ? `<div style="font-size:13px;color:var(--muted);margin-bottom:14px;white-space:pre-wrap">${esc(t.desc)}</div>` : ''}
+
+      <label class="field-label">班級</label>
+      <select class="select-input" id="taskClassSel" onchange="renderTaskStudentSel()" style="margin-bottom:12px">
+        <option value="">-- 請選擇班級 --</option>
+        ${myClasses.map(c => `<option value="${c._id}">${esc(c.name)}</option>`).join('')}
+      </select>
+
+      <label class="field-label">學生（選填，可只上傳全班一組）</label>
+      <select class="select-input" id="taskStudentSel" style="margin-bottom:12px">
+        <option value="">-- 全班 / 不指定 --</option>
+      </select>
+
+      <label class="field-label">照片（可一次選多張，手機可直接拍照）</label>
+      <input type="file" id="taskPhotoInput" accept="image/*" capture="environment" multiple
+        onchange="onTaskPhotoPick(event)"
+        style="width:100%;background:var(--surface3);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;color:var(--text);font-family:inherit;font-size:13px;margin-bottom:12px">
+
+      <div id="taskPhotoPreview" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px"></div>
+
+      <label class="field-label">備註（選填）</label>
+      <textarea class="field-input" id="taskNote" rows="2" placeholder="例：王小明未帶作業" style="margin-bottom:14px;resize:vertical"></textarea>
+
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-teal" style="flex:1;padding:12px" onclick="submitTaskPhotos()">☁️ 送出</button>
+        <button class="btn btn-ghost" style="padding:12px 20px" onclick="closeTaskUpload()">取消</button>
+      </div>
+    </div>`;
+  panel.scrollIntoView({behavior:'smooth', block:'center'});
+};
+
+window.closeTaskUpload = function() {
+  activeTaskId = null; pendingPhotos = [];
+  const p = document.getElementById('taskUploadPanel');
+  if (p) { p.style.display = 'none'; p.innerHTML = ''; }
+};
+
+window.renderTaskStudentSel = function() {
+  const cid = document.getElementById('taskClassSel').value;
+  const cls = myClasses.find(c => c._id === cid);
+  const sel = document.getElementById('taskStudentSel');
+  sel.innerHTML = '<option value="">-- 全班 / 不指定 --</option>' +
+    (cls?.students || []).map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+};
+
+window.onTaskPhotoPick = async function(ev) {
+  const files = [...(ev.target.files || [])];
+  if (!files.length) return;
+  showLoading('壓縮照片...');
+  for (const f of files) {
+    try {
+      const dataUrl = await compressImage(f);
+      pendingPhotos.push({ dataUrl, size: dataUrl.length });
+    } catch(e) { showToast('❌ '+e.message, 'error'); }
+  }
+  hideLoading();
+  ev.target.value = '';
+  renderPendingPhotos();
+};
+
+function renderPendingPhotos() {
+  const el = document.getElementById('taskPhotoPreview');
+  if (!el) return;
+  el.innerHTML = pendingPhotos.map((p,i) => `
+    <div style="position:relative">
+      <img src="${p.dataUrl}" style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--border)">
+      <button onclick="removePendingPhoto(${i})"
+        style="position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;border:none;background:var(--red);color:#fff;font-size:12px;cursor:pointer;line-height:1">✕</button>
+    </div>`).join('') ||
+    '<div style="font-size:12px;color:var(--muted)">尚未選擇照片</div>';
+}
+window.removePendingPhoto = function(i) { pendingPhotos.splice(i,1); renderPendingPhotos(); };
+
+window.submitTaskPhotos = async function() {
+  const t = allTasks.find(x => x._id === activeTaskId);
+  if (!t) return;
+  const clsId = document.getElementById('taskClassSel').value;
+  const cls   = myClasses.find(c => c._id === clsId);
+  const stu   = document.getElementById('taskStudentSel').value;
+  const note  = document.getElementById('taskNote').value.trim();
+  if (!cls) { showToast('請選擇班級','error'); return; }
+  if (!pendingPhotos.length) { showToast('請至少上傳一張照片','error'); return; }
+
+  showLoading(`上傳中 0/${pendingPhotos.length}...`);
+  try {
+    const meta   = { taskId:t._id, teacherId:currentUser.id, classId:clsId };
+    const photos = [];
+    for (let i = 0; i < pendingPhotos.length; i++) {
+      document.getElementById('loadingText').textContent = `上傳中 ${i+1}/${pendingPhotos.length}...`;
+      photos.push(await uploadPhoto(pendingPhotos[i].dataUrl, meta));
+    }
+
+    // 同任務 + 同班級 + 同學生 → 累加到既有紀錄
+    const existing = mySubsFor(t._id).find(s => s.classId === clsId && (s.studentName||'') === stu);
+    if (existing?._id) {
+      await updateDoc(doc(db,'taskSubs',existing._id), {
+        photos: [...(existing.photos||[]), ...photos],
+        note, status:'submitted', reviewNote:'', updatedAt:Date.now()
+      });
+    } else {
+      await addDoc(collection(db,'taskSubs'), {
+        taskId:t._id, taskTitle:t.title,
+        teacherId:currentUser.id, teacherName:currentUser.name,
+        classId:clsId, className:cls.name,
+        studentName:stu, photos, note,
+        status:'submitted', reviewNote:'',
+        submittedAt:Date.now(), updatedAt:Date.now()
+      });
+    }
+    showToast(`☁️ 已上傳 ${photos.length} 張`);
+    closeTaskUpload();
+    await renderTeacherTasks();
+  } catch(e) { showToast('❌ 上傳失敗：'+e.message,'error'); console.error(e); }
+  hideLoading();
+};
+
+// ══════════════════════════════════════════════════════════════
+// Admin 端
+// ══════════════════════════════════════════════════════════════
+window.renderAdminTasks = async function() {
+  renderTaskAssigneePicker();
+  const el = document.getElementById('adminTaskList');
+  el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px 0">載入中...</div>';
+  await loadTasks();
+
+  if (!allTasks.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">📸</div><div>尚未派遣任何任務</div></div>';
+    return;
+  }
+
+  // 一次撈完所有繳交紀錄，計算各任務進度
+  let subsAll = [];
+  try {
+    const snap = await getDocs(collection(db,'taskSubs'));
+    subsAll = snap.docs.map(d => ({_id:d.id, ...d.data()}));
+  } catch(e) { console.error(e); }
+  allTasks.forEach(t => { taskSubsCache[t._id] = subsAll.filter(s => s.taskId === t._id); });
+
+  el.innerHTML = allTasks.map(t => {
+    const target  = (t.assignees?.length ? t.assignees : teachers.map(x=>x.userId));
+    const subs    = taskSubsCache[t._id] || [];
+    const doneSet = new Set(subs.map(s => s.teacherId));
+    const doneN   = target.filter(id => doneSet.has(id)).length;
+    const pct     = target.length ? Math.round(doneN/target.length*100) : 0;
+    const over    = isOverdue(t);
+    const barCol  = pct === 100 ? 'var(--teal)' : over ? 'var(--red)' : 'var(--yellow)';
+    return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:15px;font-weight:700">
+            ${esc(t.title)}
+            ${t.status==='closed' ? '<span class="badge" style="background:rgba(255,255,255,.08);color:var(--muted);margin-left:6px">已結束</span>' : ''}
+            ${over ? '<span class="badge" style="background:rgba(255,107,107,.15);color:var(--red);margin-left:6px">逾期</span>' : ''}
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">
+            派遣 ${target.length} 位老師　${t.dueDate?`截止 ${t.dueDate}　`:''}每人需 ${t.minPhotos||1} 張
+          </div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost btn-sm" onclick="toggleTaskDetail('${t._id}')">📂 檢視</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleTaskStatus('${t._id}')">${t.status==='closed'?'♻️ 重啟':'🔒 結束'}</button>
+          <button class="btn btn-sm" style="background:rgba(255,107,107,.15);color:var(--red)" onclick="deleteTask('${t._id}','${esc(t.title)}')">🗑</button>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="flex:1;height:8px;background:var(--surface3);border-radius:20px;overflow:hidden">
+          <div style="width:${pct}%;height:100%;background:${barCol};transition:width .3s"></div>
+        </div>
+        <div style="font-size:12px;font-weight:700;color:${barCol};min-width:70px;text-align:right">${doneN}/${target.length} 已繳</div>
+      </div>
+      <div id="taskDetail_${t._id}" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)"></div>
+    </div>`;
+  }).join('');
+};
+
+function renderTaskAssigneePicker() {
+  const el = document.getElementById('taskAssigneePicker');
+  if (!el) return;
+  el.innerHTML = teachers.length
+    ? teachers.map(t => `
+      <label style="display:inline-flex;align-items:center;gap:6px;background:var(--surface3);border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:13px;cursor:pointer;margin:3px">
+        <input type="checkbox" class="taskAssignee" value="${t.userId}" style="accent-color:var(--teal)">
+        ${esc(t.name)}
+      </label>`).join('')
+    : '<div style="font-size:13px;color:var(--muted)">請先新增老師帳號</div>';
+}
+window.toggleAllAssignees = function(on) {
+  document.querySelectorAll('.taskAssignee').forEach(c => c.checked = on);
+};
+
+window.createTask = async function() {
+  const title = document.getElementById('newTaskTitle').value.trim();
+  const desc  = document.getElementById('newTaskDesc').value.trim();
+  const due   = document.getElementById('newTaskDue').value;
+  const minP  = parseInt(document.getElementById('newTaskMin').value) || 1;
+  const assignees = [...document.querySelectorAll('.taskAssignee:checked')].map(c => c.value);
+  if (!title) { showToast('請填寫任務名稱','error'); return; }
+  if (!assignees.length) { showToast('請至少選擇一位老師','error'); return; }
+
+  showLoading('建立任務...');
+  try {
+    await addDoc(collection(db,'tasks'), {
+      title, desc, dueDate:due||'', minPhotos:minP,
+      assignees, status:'open',
+      createdBy:'admin', createdAt:Date.now()
+    });
+    showToast(`✅ 已派遣：${title}`);
+    ['newTaskTitle','newTaskDesc','newTaskDue'].forEach(id => document.getElementById(id).value='');
+    document.getElementById('newTaskMin').value = '1';
+    toggleAllAssignees(false);
+    await renderAdminTasks();
+  } catch(e) { showToast('❌ 建立失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+window.toggleTaskStatus = async function(taskId) {
+  const t = allTasks.find(x => x._id === taskId);
+  if (!t) return;
+  const next = t.status === 'closed' ? 'open' : 'closed';
+  showLoading('更新中...');
+  try {
+    await updateDoc(doc(db,'tasks',taskId), { status:next, updatedAt:Date.now() });
+    showToast(next==='closed' ? '🔒 任務已結束' : '♻️ 任務已重啟');
+    await renderAdminTasks();
+  } catch(e) { showToast('❌ 更新失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+window.deleteTask = async function(taskId, title) {
+  if (!confirm(`確定刪除任務「${title}」？\n所有繳交紀錄與照片將一併刪除，且無法還原。`)) return;
+  showLoading('刪除中...');
+  try {
+    const [subSnap, photoSnap] = await Promise.all([
+      getDocs(query(collection(db,'taskSubs'),   where('taskId','==',taskId))),
+      getDocs(query(collection(db,'taskPhotos'), where('taskId','==',taskId)))
+    ]);
+    await Promise.all([
+      ...subSnap.docs.map(d   => deleteDoc(doc(db,'taskSubs',d.id))),
+      ...photoSnap.docs.map(d => deleteDoc(doc(db,'taskPhotos',d.id)))
+    ]);
+    await deleteDoc(doc(db,'tasks',taskId));
+    showToast('🗑 任務已刪除');
+    await renderAdminTasks();
+  } catch(e) { showToast('❌ 刪除失敗：'+e.message,'error'); console.error(e); }
+  hideLoading();
+};
+
+window.toggleTaskDetail = async function(taskId) {
+  const box = document.getElementById('taskDetail_'+taskId);
+  if (!box) return;
+  if (box.style.display === 'block') { box.style.display='none'; adminOpenTaskId=null; return; }
+  adminOpenTaskId = taskId;
+  box.style.display = 'block';
+  box.innerHTML = '<div style="font-size:13px;color:var(--muted)">載入照片中...</div>';
+
+  const t = allTasks.find(x => x._id === taskId);
+  const subs = await loadTaskSubs(taskId);
+  if (PHOTO_BACKEND === 'firestore') await loadTaskPhotos(taskId);
+
+  const target  = (t.assignees?.length ? t.assignees : teachers.map(x=>x.userId));
+  const doneSet = new Set(subs.map(s => s.teacherId));
+  const missing = target.filter(id => !doneSet.has(id))
+                        .map(id => teachers.find(x => x.userId===id)?.name || id);
+
+  box.innerHTML = `
+    ${missing.length ? `
+    <div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.2);border-radius:10px;padding:12px;margin-bottom:12px">
+      <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px">❌ 尚未繳交（${missing.length} 位）</div>
+      <div>${missing.map(n=>`<span style="display:inline-block;background:rgba(255,107,107,.2);color:var(--red);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px">${esc(n)}</span>`).join('')}</div>
+    </div>` : ''}
+    ${subs.length ? subs.map(s => {
+      const st = SUB_STATUS[s.status] || SUB_STATUS.submitted;
+      return `
+      <div style="background:var(--surface3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <div style="font-size:14px;font-weight:700">${esc(s.teacherName)}　<span style="font-weight:400;font-size:12px;color:var(--muted)">${esc(s.className||'')}${s.studentName?' · '+esc(s.studentName):''}</span></div>
+          <span style="background:${st.bg};color:${st.color};border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700">${st.label}</span>
+        </div>
+        ${s.note ? `<div style="font-size:13px;color:var(--muted);margin-bottom:10px">備註：${esc(s.note)}</div>` : ''}
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+          ${(s.photos||[]).map(p => {
+            const src = p.kind==='url' ? p.url : (taskPhotoCache[p.id]||'');
+            return src
+              ? `<img src="${src}" onclick="window.open('${src.startsWith('data:')?'':src}','_blank')" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in">`
+              : `<div style="width:96px;height:96px;border-radius:8px;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted)">載入失敗</div>`;
+          }).join('') || '<span style="font-size:12px;color:var(--muted)">無照片</span>'}
+        </div>
+        ${s.reviewNote ? `<div style="font-size:12px;color:var(--red);margin-bottom:8px">主管備註：${esc(s.reviewNote)}</div>` : ''}
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-teal btn-sm" onclick="reviewSub('${s._id}','approved')">✅ 通過</button>
+          <button class="btn btn-sm" style="background:rgba(255,107,107,.15);color:var(--red)" onclick="reviewSub('${s._id}','rejected')">❗ 要求補件</button>
+        </div>
+      </div>`;
+    }).join('') : '<div style="font-size:13px;color:var(--muted)">尚無老師繳交</div>'}`;
+};
+
+window.reviewSub = async function(subId, status) {
+  let note = '';
+  if (status === 'rejected') {
+    note = prompt('請說明需要補件的原因：') || '';
+    if (!note) return;
+  }
+  showLoading('更新中...');
+  try {
+    await updateDoc(doc(db,'taskSubs',subId), { status, reviewNote:note, reviewedAt:Date.now() });
+    showToast(status==='approved' ? '✅ 已通過' : '❗ 已要求補件');
+    if (adminOpenTaskId) {
+      const box = document.getElementById('taskDetail_'+adminOpenTaskId);
+      if (box) { box.style.display='none'; await toggleTaskDetail(adminOpenTaskId); }
+    }
+  } catch(e) { showToast('❌ 更新失敗：'+e.message,'error'); }
+  hideLoading();
 };
 
 </script>
@@ -2584,6 +3131,7 @@ window.confirmDelete= async function() {
       <button class="tab" onclick="adminSwitchTab('schedule',this)">📅 周課表</button>
       <button class="tab" onclick="adminSwitchTab('classreport',this)">📊 班級報表</button>
       <button class="tab" onclick="adminSwitchTab('promote',this)">🎓 升班管理</button>
+      <button class="tab" onclick="adminSwitchTab('tasks',this)">📸 任務派遣</button>
       <button class="tab" onclick="adminSwitchTab('accounts',this)">⚙️ 帳號管理</button>
     </div>
 
@@ -2701,7 +3249,7 @@ window.confirmDelete= async function() {
     <div id="admin-tab-schedule" style="display:none;">
 
       <!-- Today's status banner -->
-      <div id="scheduleStatusBanner" style="margin-bottom:18px;"></div>
+      <div id="scheduleStatusBanner2" style="margin-bottom:18px;"></div>
 
       <!-- Schedule editor -->
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px;">
@@ -2727,6 +3275,45 @@ window.confirmDelete= async function() {
       </div>
     </div>
 
+
+    <!-- TASK DISPATCH (admin) -->
+    <div id="admin-tab-tasks" style="display:none;">
+
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px;">
+        <div style="font-size:15px;font-weight:700;margin-bottom:14px;">📸 派遣新的抽查任務</div>
+
+        <label class="field-label">任務名稱</label>
+        <input class="field-input" id="newTaskTitle" placeholder="例：9月份作業抽查" style="margin-bottom:12px">
+
+        <label class="field-label">任務說明（老師會看到）</label>
+        <textarea class="field-input" id="newTaskDesc" rows="3" placeholder="例：請拍攝班上任意 3 位學生的數學習作 P.30-32，需清楚看到批改痕跡" style="margin-bottom:12px;resize:vertical"></textarea>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+          <div>
+            <label class="field-label">截止日期（選填）</label>
+            <input type="date" id="newTaskDue" class="field-input" style="margin-bottom:0">
+          </div>
+          <div>
+            <label class="field-label">每位老師最少上傳張數</label>
+            <input type="number" id="newTaskMin" class="field-input" value="1" min="1" max="50" style="margin-bottom:0">
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <label class="field-label" style="margin:0">指派給哪些老師</label>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-sm" onclick="toggleAllAssignees(true)">全選</button>
+            <button class="btn btn-ghost btn-sm" onclick="toggleAllAssignees(false)">清除</button>
+          </div>
+        </div>
+        <div id="taskAssigneePicker" style="margin-bottom:16px;"></div>
+
+        <button class="btn btn-teal" style="width:100%;padding:12px;font-size:14px;" onclick="createTask()">🚀 派遣任務</button>
+      </div>
+
+      <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:12px;">📋 任務列表</div>
+      <div id="adminTaskList"></div>
+    </div>
     <!-- PROMOTE -->
     <div id="admin-tab-promote" style="display:none;">
 
