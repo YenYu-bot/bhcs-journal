@@ -2681,6 +2681,12 @@ window.renderTeacherTasks = async function() {
     (!t.assignees || !t.assignees.length || t.assignees.includes(currentUser.id))
   );
 
+  // 把自己已繳交任務的照片抓進快取，才能顯示縮圖
+  if (PHOTO_BACKEND === 'firestore') {
+    const taskIdsWithSubs = [...new Set((taskSubsCache._mine||[]).map(x => x.taskId))];
+    await Promise.all(taskIdsWithSubs.map(id => loadTaskPhotos(id)));
+  }
+
   if (!myTasks.length) {
     el.innerHTML = '<div class="empty"><div class="empty-icon">📸</div><div>目前沒有待辦的抽查任務</div></div>';
     return;
@@ -2716,6 +2722,15 @@ window.renderTeacherTasks = async function() {
           return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;font-size:12px;flex-wrap:wrap">
             <span style="color:var(--muted)">${esc(s.className||'—')}${s.studentName?' · '+esc(s.studentName):''}　${s.photos?.length||0} 張</span>
             <span style="background:${st.bg};color:${st.color};border-radius:20px;padding:2px 10px;font-weight:700">${st.label}</span>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;padding-bottom:8px">
+            ${(s.photos||[]).map(p => {
+              const src = p.kind==='url' ? p.url : (taskPhotoCache[p.id]||'');
+              const key = p.kind==='url' ? p.url : p.id;
+              return src
+                ? `<img src="${src}" onclick="openPhotoView('${p.kind}','${esc(key)}')" style="width:56px;height:56px;object-fit:cover;border-radius:6px;border:1px solid var(--border);cursor:zoom-in">`
+                : '';
+            }).join('')}
           </div>${s.reviewNote ? `<div style="font-size:12px;color:var(--red);padding-bottom:6px">主管備註：${esc(s.reviewNote)}</div>` : ''}`;
         }).join('')}
       </div>` : ''}
@@ -3016,8 +3031,9 @@ window.toggleTaskDetail = async function(taskId) {
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
           ${(s.photos||[]).map(p => {
             const src = p.kind==='url' ? p.url : (taskPhotoCache[p.id]||'');
+            const key = p.kind==='url' ? p.url : p.id;
             return src
-              ? `<img src="${src}" onclick="window.open('${src.startsWith('data:')?'':src}','_blank')" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in">`
+              ? `<img src="${src}" onclick="openPhotoView('${p.kind}','${esc(key)}')" title="點擊放大" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--border);cursor:zoom-in">`
               : `<div style="width:96px;height:96px;border-radius:8px;border:1px dashed var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted)">載入失敗</div>`;
           }).join('') || '<span style="font-size:12px;color:var(--muted)">無照片</span>'}
         </div>
@@ -3029,6 +3045,43 @@ window.toggleTaskDetail = async function(taskId) {
       </div>`;
     }).join('') : '<div style="font-size:13px;color:var(--muted)">尚無老師繳交</div>'}`;
 };
+
+// ── 照片燈箱 ──────────────────────────────────────────────────
+// 注意：Chrome 會阻擋直接開啟 data: URL 的分頁，所以放大一定要用
+// 同頁面的 overlay，不能用 window.open()。
+window.openPhotoView = function(kind, key) {
+  const src = kind === 'url' ? key : (taskPhotoCache[key] || '');
+  if (!src) { showToast('照片尚未載入完成，請稍候再試', 'error'); return; }
+
+  let ov = document.getElementById('photoLightbox');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'photoLightbox';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:99999;'
+      + 'display:none;align-items:center;justify-content:center;padding:24px;cursor:zoom-out;';
+    ov.addEventListener('click', ev => { if (ev.target === ov) closePhotoView(); });
+    document.body.appendChild(ov);
+  }
+
+  ov.innerHTML = `
+    <img src="${src}" style="max-width:100%;max-height:84vh;object-fit:contain;border-radius:10px;box-shadow:0 8px 40px rgba(0,0,0,.6);cursor:default">
+    <button onclick="closePhotoView()" aria-label="關閉"
+      style="position:absolute;top:18px;right:22px;width:40px;height:40px;border-radius:50%;border:none;background:rgba(255,255,255,.15);color:#fff;font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    <a href="${src}" download="作業抽查.jpg"
+      style="position:absolute;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,.15);color:#fff;text-decoration:none;border-radius:20px;padding:9px 22px;font-size:13px;font-weight:700;">⬇️ 下載原圖</a>`;
+  ov.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+};
+
+window.closePhotoView = function() {
+  const ov = document.getElementById('photoLightbox');
+  if (ov) { ov.style.display = 'none'; ov.innerHTML = ''; }
+  document.body.style.overflow = '';
+};
+
+document.addEventListener('keydown', ev => {
+  if (ev.key === 'Escape') closePhotoView();
+});
 
 window.reviewSub = async function(subId, status) {
   let note = '';
