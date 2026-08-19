@@ -1821,17 +1821,125 @@ window.exportAlertCSV = function() {
 };
 // ── SCHEDULE ──
 const WEEKDAYS_LIST = ['一','二','三','四','五','六','日'];
-let schedule = {}; // { teacherId: ['一','三','五', ...] }
+let schedule       = {};   // 目前生效課表的 { teacherId: ['一','三','五'] }
+let scheduleSets   = [];   // 所有課表版本
+let editingSetId   = null; // 編輯中的課表版本
+let editingDays    = {};   // 編輯中的排課（未儲存）
+let scheduleConfig = { mode:'auto', activeSetId:'' };
+let activeSetId    = null; // 實際生效中的課表版本
+
+// ── 判斷某個日期該套用哪份課表 ──────────────────────────────
+// 規則：先找日期區間涵蓋該日的課表（多份符合時取開始日最晚的，也就是最精確的）；
+//      都不符合就用「常態課表」（沒有設定起訖日的那份）。
+function resolveScheduleSet(iso) {
+  if (!scheduleSets.length) return null;
+  if (scheduleConfig.mode === 'manual' && scheduleConfig.activeSetId) {
+    const forced = scheduleSets.find(x => x._id === scheduleConfig.activeSetId);
+    if (forced) return forced;
+  }
+  const dated = scheduleSets
+    .filter(x => (x.startDate || x.endDate))
+    .filter(x => (!x.startDate || x.startDate <= iso) && (!x.endDate || iso <= x.endDate))
+    .sort((a,b) => (b.startDate||'').localeCompare(a.startDate||''));
+  if (dated.length) return dated[0];
+  return scheduleSets.find(x => !x.startDate && !x.endDate) || null;
+}
 
 async function loadSchedule() {
   try {
-    const snap = await getDocs(collection(db,'schedule'));
-    schedule = {};
-    snap.docs.forEach(d => { schedule[d.id] = d.data().days||[]; });
+    const [setSnap, cfgSnap] = await Promise.all([
+      getDocs(collection(db,'scheduleSets')),
+      getDocs(collection(db,'scheduleConfig'))
+    ]);
+    scheduleSets = setSnap.docs.map(d => ({_id:d.id, ...d.data()}))
+      .sort((a,b) => (a.startDate||'').localeCompare(b.startDate||'') || (a.createdAt||0)-(b.createdAt||0));
+
+    const cfg = cfgSnap.docs.find(d => d.id === 'current');
+    scheduleConfig = cfg ? { mode:'auto', activeSetId:'', ...cfg.data() } : { mode:'auto', activeSetId:'' };
+
+    // 首次使用：把舊的 schedule collection 轉成一份「常態課表」
+    if (!scheduleSets.length) {
+      const legacy = await getDocs(collection(db,'schedule'));
+      const days = {};
+      legacy.docs.forEach(d => { if ((d.data().days||[]).length) days[d.id] = d.data().days; });
+      const ref = await addDoc(collection(db,'scheduleSets'), {
+        name:'常態課表', startDate:'', endDate:'', days,
+        createdAt:Date.now(), updatedAt:Date.now()
+      });
+      scheduleSets = [{ _id:ref.id, name:'常態課表', startDate:'', endDate:'', days, createdAt:Date.now() }];
+    }
+
+    const act = resolveScheduleSet(todayISO());
+    activeSetId = act?._id || null;
+    schedule    = act?.days ? {...act.days} : {};
+
+    if (editingSetId && !scheduleSets.some(x => x._id === editingSetId)) editingSetId = null;
+    if (!editingSetId) editingSetId = activeSetId || scheduleSets[0]?._id || null;
+    editingDays = { ...(scheduleSets.find(x => x._id === editingSetId)?.days || {}) };
   } catch(e) { console.error('loadSchedule:', e); }
 }
 
+function renderScheduleSetBar() {
+  const el = document.getElementById('scheduleSetBar');
+  if (!el) return;
+  const cur = scheduleSets.find(x => x._id === editingSetId);
+  const act = scheduleSets.find(x => x._id === activeSetId);
+
+  el.innerHTML = `
+    <div style="background:rgba(123,97,255,.07);border:1px solid rgba(123,97,255,.22);border-radius:var(--radius);padding:14px;margin-bottom:16px">
+      <div style="font-size:13px;margin-bottom:12px">
+        <span style="color:var(--muted)">目前生效：</span>
+        <span style="font-weight:700;color:var(--purple)">${act ? esc(act.name) : '尚未設定'}</span>
+        <span style="color:var(--muted);font-size:12px">
+          ${scheduleConfig.mode === 'manual' ? '（手動指定）' : '（依日期自動判斷）'}
+        </span>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <label class="field-label" style="margin:0;min-width:64px">編輯課表</label>
+        <select class="select-input" id="scheduleSetSel" onchange="switchEditingSet(this.value)"
+          style="margin:0;flex:1;min-width:180px">
+          ${scheduleSets.map(x => `<option value="${x._id}" ${x._id===editingSetId?'selected':''}>
+            ${esc(x.name)}${x._id===activeSetId?'　★ 生效中':''}
+          </option>`).join('')}
+        </select>
+        <button class="btn btn-ghost btn-sm" onclick="newScheduleSet()">➕ 新增</button>
+        <button class="btn btn-ghost btn-sm" onclick="duplicateScheduleSet()">📋 複製</button>
+        <button class="btn btn-sm" style="background:rgba(255,107,107,.15);color:var(--red)" onclick="deleteScheduleSet()">🗑</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+        <div>
+          <label class="field-label">課表名稱</label>
+          <input class="field-input" id="setName" value="${esc(cur?.name||'')}" style="margin:0">
+        </div>
+        <div>
+          <label class="field-label">適用起日</label>
+          <input type="date" class="field-input" id="setStart" value="${cur?.startDate||''}" style="margin:0">
+        </div>
+        <div>
+          <label class="field-label">適用迄日</label>
+          <input type="date" class="field-input" id="setEnd" value="${cur?.endDate||''}" style="margin:0">
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">
+        起訖日都留空 =「常態課表」，當沒有任何特殊期間涵蓋今天時就套用它。寒暑假課表請填上日期區間。
+      </div>
+
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label class="field-label" style="margin:0">生效方式</label>
+        <select class="select-input" id="scheduleModeSel" onchange="setScheduleMode(this.value)" style="margin:0;flex:1;min-width:220px">
+          <option value="auto" ${scheduleConfig.mode!=='manual'?'selected':''}>自動：依今天的日期判斷</option>
+          ${scheduleSets.map(x => `<option value="m:${x._id}" ${scheduleConfig.mode==='manual'&&scheduleConfig.activeSetId===x._id?'selected':''}>
+            手動固定套用：${esc(x.name)}
+          </option>`).join('')}
+        </select>
+      </div>
+    </div>`;
+}
+
 function renderScheduleEditor() {
+  renderScheduleSetBar();
   const el = document.getElementById('scheduleEditor');
   if (!el) return;
   if (!teachers.length) {
@@ -1839,7 +1947,7 @@ function renderScheduleEditor() {
     return;
   }
   el.innerHTML = teachers.map(t => {
-    const days = schedule[t.userId] || [];
+    const days = editingDays[t.userId] || [];
     return `<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;">
       <div style="min-width:90px;font-size:14px;font-weight:700">${t.name}</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -1859,14 +1967,14 @@ function renderScheduleEditor() {
 }
 
 window.toggleScheduleDay = function(userId, day) {
-  if (!schedule[userId]) schedule[userId] = [];
-  const idx = schedule[userId].indexOf(day);
-  if (idx >= 0) schedule[userId].splice(idx, 1);
-  else schedule[userId].push(day);
+  if (!editingDays[userId]) editingDays[userId] = [];
+  const idx = editingDays[userId].indexOf(day);
+  if (idx >= 0) editingDays[userId].splice(idx, 1);
+  else editingDays[userId].push(day);
   // Update button style immediately
   const btn = document.getElementById(`sched_${userId}_${day}`);
   if (btn) {
-    const active = schedule[userId].includes(day);
+    const active = editingDays[userId].includes(day);
     btn.style.cssText = (active
       ? 'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;border:none;'
       : 'background:var(--surface3);color:var(--muted);border:1px solid var(--border);')
@@ -1875,22 +1983,117 @@ window.toggleScheduleDay = function(userId, day) {
 };
 
 window.saveSchedule = async function() {
+  if (!editingSetId) { showToast('請先新增一份課表','error'); return; }
+  const name  = document.getElementById('setName').value.trim();
+  const start = document.getElementById('setStart').value;
+  const end   = document.getElementById('setEnd').value;
+  if (!name) { showToast('請填寫課表名稱','error'); return; }
+  if (start && end && start > end) { showToast('起日不能晚於迄日','error'); return; }
+
+  // 只保留還存在的老師，並清掉空陣列
+  const days = {};
+  teachers.forEach(t => {
+    const d = editingDays[t.userId] || [];
+    if (d.length) days[t.userId] = d;
+  });
+
   showLoading('儲存課表...');
   try {
-    // Save each teacher's schedule as a doc with their userId
-    const promises = Object.entries(schedule).map(([userId, days]) =>
-      setDoc(doc(db,'schedule',userId), {days, updatedAt:Date.now()})
-    );
-    // Also save teachers with no days set (clear their schedule)
-    teachers.forEach(t => {
-      if (!schedule[t.userId]) {
-        promises.push(setDoc(doc(db,'schedule',t.userId), {days:[], updatedAt:Date.now()}));
-      }
-    });
-    await Promise.all(promises);
-    showToast('💾 課表已儲存');
+    await setDoc(doc(db,'scheduleSets',editingSetId), {
+      name, startDate:start, endDate:end, days, updatedAt:Date.now()
+    }, { merge:true });
+    await loadSchedule();
+    renderScheduleEditor();
     renderScheduleStatusBanner();
+    showToast('💾 課表已儲存');
   } catch(e) { showToast('❌ 儲存失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+window.switchEditingSet = function(id) {
+  const dirty = JSON.stringify(editingDays) !== JSON.stringify(scheduleSets.find(x=>x._id===editingSetId)?.days||{});
+  if (dirty && !confirm('這份課表有未儲存的變更，切換後會遺失。確定要切換嗎？')) {
+    document.getElementById('scheduleSetSel').value = editingSetId;
+    return;
+  }
+  editingSetId = id;
+  editingDays  = { ...(scheduleSets.find(x => x._id === id)?.days || {}) };
+  renderScheduleEditor();
+};
+
+window.newScheduleSet = async function() {
+  const name = prompt('新課表名稱：', '寒假課表');
+  if (!name) return;
+  showLoading('建立中...');
+  try {
+    const ref = await addDoc(collection(db,'scheduleSets'), {
+      name, startDate:'', endDate:'', days:{}, createdAt:Date.now(), updatedAt:Date.now()
+    });
+    editingSetId = ref.id;
+    await loadSchedule();
+    editingSetId = ref.id;
+    editingDays  = {};
+    renderScheduleEditor();
+    showToast('✅ 已建立，記得設定適用日期');
+  } catch(e) { showToast('❌ 建立失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+window.duplicateScheduleSet = async function() {
+  const cur = scheduleSets.find(x => x._id === editingSetId);
+  if (!cur) return;
+  const name = prompt('複製為新課表，名稱：', cur.name + ' 複本');
+  if (!name) return;
+  showLoading('複製中...');
+  try {
+    const ref = await addDoc(collection(db,'scheduleSets'), {
+      name, startDate:'', endDate:'', days:{ ...(cur.days||{}) },
+      createdAt:Date.now(), updatedAt:Date.now()
+    });
+    editingSetId = ref.id;
+    await loadSchedule();
+    editingSetId = ref.id;
+    editingDays  = { ...(cur.days||{}) };
+    renderScheduleEditor();
+    showToast('📋 已複製，記得設定適用日期');
+  } catch(e) { showToast('❌ 複製失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+window.deleteScheduleSet = async function() {
+  const cur = scheduleSets.find(x => x._id === editingSetId);
+  if (!cur) return;
+  if (scheduleSets.length <= 1) { showToast('至少要保留一份課表','error'); return; }
+  if (!confirm(`確定刪除課表「${cur.name}」？此操作無法還原。`)) return;
+  showLoading('刪除中...');
+  try {
+    await deleteDoc(doc(db,'scheduleSets',editingSetId));
+    if (scheduleConfig.mode === 'manual' && scheduleConfig.activeSetId === editingSetId) {
+      await setDoc(doc(db,'scheduleConfig','current'), { mode:'auto', activeSetId:'' });
+    }
+    editingSetId = null;
+    await loadSchedule();
+    renderScheduleEditor();
+    renderScheduleStatusBanner();
+    showToast('🗑 課表已刪除');
+  } catch(e) { showToast('❌ 刪除失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+window.setScheduleMode = async function(val) {
+  const manual = val.startsWith('m:');
+  showLoading('更新中...');
+  try {
+    await setDoc(doc(db,'scheduleConfig','current'), {
+      mode: manual ? 'manual' : 'auto',
+      activeSetId: manual ? val.slice(2) : '',
+      updatedAt: Date.now()
+    });
+    await loadSchedule();
+    renderScheduleEditor();
+    renderScheduleStatusBanner();
+    showToast(manual ? '📌 已固定套用指定課表' : '🔄 已改為依日期自動判斷');
+  } catch(e) { showToast('❌ 更新失敗：'+e.message,'error'); }
   hideLoading();
 };
 
@@ -1939,12 +2142,14 @@ window.checkMissingLogs = function() {
   const dayIdx  = new Date(dateVal).getDay(); // 0=Sun
   const weekday = WEEKDAYS_LIST[dayIdx===0 ? 6 : dayIdx-1];
 
-  const scheduledOnDay = teachers.filter(t => (schedule[t.userId]||[]).includes(weekday));
+  const setForDay = resolveScheduleSet(dateVal);
+  const daysForDay = setForDay?.days || {};
+  const scheduledOnDay = teachers.filter(t => (daysForDay[t.userId]||[]).includes(weekday));
   const filedOnDay     = new Set(allEntries.filter(e => entryDateToMMDD(e.date)===mmdd).map(e=>e.teacherId));
 
   const filed   = scheduledOnDay.filter(t => filedOnDay.has(t.userId));
   const missing = scheduledOnDay.filter(t => !filedOnDay.has(t.userId));
-  const noClass = teachers.filter(t => !(schedule[t.userId]||[]).includes(weekday));
+  const noClass = teachers.filter(t => !(daysForDay[t.userId]||[]).includes(weekday));
 
   const el = document.getElementById('missingLogsResult');
   if (!scheduledOnDay.length) {
@@ -1952,7 +2157,7 @@ window.checkMissingLogs = function() {
     return;
   }
   el.innerHTML = `
-    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">${dateVal}（週${weekday}）排課 ${scheduledOnDay.length} 位老師</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">${dateVal}（週${weekday}）排課 ${scheduledOnDay.length} 位老師　<span style="opacity:.7">課表：${esc(setForDay?.name||'未設定')}</span></div>
     ${missing.length ? `
     <div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.2);border-radius:10px;padding:14px;margin-bottom:10px;">
       <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px;">❌ 尚未填寫（${missing.length} 位）</div>
@@ -3414,7 +3619,8 @@ window.reviewSub = async function(subId, status) {
           <div style="font-size:15px;font-weight:700;">📅 設定周課表</div>
           <button class="btn btn-teal btn-sm" onclick="saveSchedule()">💾 儲存課表</button>
         </div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">設定每位老師每週固定上課的日期，系統將在當天提醒哪些老師尚未填寫日誌。</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">設定每位老師每週固定上課的日期。可建立多份課表（例如常態、寒假、暑假），系統會依今天的日期自動套用對應那份。</div>
+        <div id="scheduleSetBar"></div>
         <div id="scheduleEditor"></div>
       </div>
 
