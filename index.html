@@ -2570,6 +2570,23 @@ function isOverdue(task) {
   return task.dueDate && task.dueDate < todayISO() && task.status !== 'closed';
 }
 
+// 統一新舊格式：新任務有 targets（班級層級），舊任務只有 assignees（老師層級）
+function taskTargets(task) {
+  if (task.targets?.length) return task.targets;
+  const ids = task.assignees?.length ? task.assignees : teachers.map(t => t.userId);
+  return ids.map(id => ({
+    classId: '', className: '',
+    teacherId: id,
+    teacherName: teachers.find(t => t.userId === id)?.name || id
+  }));
+}
+
+// 這個任務指派給某位老師的班級 id 清單；回傳 null 代表「不限班級」（舊任務）
+function taskClassIdsFor(task, teacherId) {
+  if (!task.targets?.length) return null;
+  return task.targets.filter(x => x.teacherId === teacherId).map(x => x.classId);
+}
+
 // ── 工具：圖片壓縮 ──
 function compressImage(file, maxEdge = PHOTO_MAX_EDGE, quality = PHOTO_QUALITY) {
   return new Promise((resolve, reject) => {
@@ -2694,9 +2711,21 @@ window.renderTeacherTasks = async function() {
 
   el.innerHTML = myTasks.map(t => {
     const subs   = mySubsFor(t._id);
-    const photos = subs.reduce((a,s) => a + (s.photos?.length||0), 0);
     const need   = t.minPhotos || 1;
-    const done   = photos >= need;
+    const myClassIds = taskClassIdsFor(t, currentUser.id);   // null = 舊任務，不限班級
+    const myTargets  = myClassIds
+      ? myClassIds.map(id => ({ classId:id, name: (t.targets.find(x=>x.classId===id)?.className) || myClasses.find(c=>c._id===id)?.name || '（班級已刪除）' }))
+      : [];
+
+    // 每個指定班級是否已達張數
+    const perClassDone = myTargets.map(tg => ({
+      ...tg,
+      photos: subs.filter(s => s.classId === tg.classId).reduce((a,s)=>a+(s.photos?.length||0),0)
+    }));
+    const doneClasses = perClassDone.filter(x => x.photos >= need).length;
+
+    const photos = subs.reduce((a,s) => a + (s.photos?.length||0), 0);
+    const done   = myTargets.length ? doneClasses === myTargets.length : photos >= need;
     const rejected = subs.some(s => s.status === 'rejected');
     const over   = isOverdue(t);
     const color  = rejected ? 'var(--red)' : done ? 'var(--teal)' : over ? 'var(--red)' : 'var(--yellow)';
@@ -2707,8 +2736,16 @@ window.renderTeacherTasks = async function() {
         <div style="flex:1;min-width:200px">
           <div style="font-size:15px;font-weight:700;margin-bottom:4px">${esc(t.title)}</div>
           <div style="font-size:12px;color:var(--muted);line-height:1.6">
-            ${t.dueDate ? `截止：${t.dueDate}　` : ''}需上傳 ${need} 張　已上傳 ${photos} 張
+            ${t.dueDate ? `截止：${t.dueDate}　` : ''}每班需 ${need} 張
           </div>
+          ${myTargets.length ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:5px">
+            ${perClassDone.map(c => {
+              const ok = c.photos >= need;
+              return `<span style="display:inline-flex;align-items:center;gap:4px;background:${ok?'rgba(86,204,178,.15)':'rgba(255,255,255,.06)'};border:1px solid ${ok?'rgba(86,204,178,.35)':'var(--border)'};color:${ok?'var(--teal)':'var(--muted)'};border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700">
+                ${ok?'✅':'○'} ${esc(c.name)} ${c.photos}/${need}
+              </span>`;
+            }).join('')}
+          </div>` : ''}
           ${t.desc ? `<div style="font-size:13px;color:var(--text);margin-top:8px;white-space:pre-wrap;opacity:.85">${esc(t.desc)}</div>` : ''}
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
@@ -2743,6 +2780,17 @@ window.openTaskUpload = function(taskId) {
   pendingPhotos = [];
   const t = allTasks.find(x => x._id === taskId);
   if (!t) return;
+
+  // 只讓老師選這個任務指定給他的班級
+  const allowedIds = taskClassIdsFor(t, currentUser.id);
+  const selectable = allowedIds
+    ? myClasses.filter(c => allowedIds.includes(c._id))
+    : myClasses;
+  if (allowedIds && !selectable.length) {
+    showToast('這個任務指定的班級已不存在，請聯絡主管','error');
+    return;
+  }
+
   const panel = document.getElementById('taskUploadPanel');
   panel.style.display = 'block';
   panel.innerHTML = `
@@ -2750,10 +2798,10 @@ window.openTaskUpload = function(taskId) {
       <div class="card-title">📷 上傳作業照片 — ${esc(t.title)}</div>
       ${t.desc ? `<div style="font-size:13px;color:var(--muted);margin-bottom:14px;white-space:pre-wrap">${esc(t.desc)}</div>` : ''}
 
-      <label class="field-label">班級</label>
+      <label class="field-label">班級${allowedIds ? '（本次抽查指定）' : ''}</label>
       <select class="select-input" id="taskClassSel" onchange="renderTaskStudentSel()" style="margin-bottom:12px">
         <option value="">-- 請選擇班級 --</option>
-        ${myClasses.map(c => `<option value="${c._id}">${esc(c.name)}</option>`).join('')}
+        ${selectable.map(c => `<option value="${c._id}">${esc(c.name)}</option>`).join('')}
       </select>
 
       <label class="field-label">學生（選填，可只上傳全班一組）</label>
@@ -2868,9 +2916,17 @@ window.submitTaskPhotos = async function() {
 // Admin 端
 // ══════════════════════════════════════════════════════════════
 window.renderAdminTasks = async function() {
-  renderTaskAssigneePicker();
   const el = document.getElementById('adminTaskList');
   el.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px 0">載入中...</div>';
+
+  // 派遣表單需要班級清單（升班頁以外的地方不會自動載入）
+  if (!allClasses.length) {
+    try {
+      const snap = await getDocs(collection(db,'classes'));
+      allClasses = snap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    } catch(e) { console.error('loadClasses(admin):', e); }
+  }
+  renderTaskAssigneePicker();
   await loadTasks();
 
   if (!allTasks.length) {
@@ -2887,10 +2943,10 @@ window.renderAdminTasks = async function() {
   allTasks.forEach(t => { taskSubsCache[t._id] = subsAll.filter(s => s.taskId === t._id); });
 
   el.innerHTML = allTasks.map(t => {
-    const target  = (t.assignees?.length ? t.assignees : teachers.map(x=>x.userId));
+    const target  = taskTargets(t);
     const subs    = taskSubsCache[t._id] || [];
-    const doneSet = new Set(subs.map(s => s.teacherId));
-    const doneN   = target.filter(id => doneSet.has(id)).length;
+    const doneSet = new Set(subs.map(s => s.classId ? s.classId : 'T:'+s.teacherId));
+    const doneN   = target.filter(x => doneSet.has(x.classId || ('T:'+x.teacherId))).length;
     const pct     = target.length ? Math.round(doneN/target.length*100) : 0;
     const over    = isOverdue(t);
     const barCol  = pct === 100 ? 'var(--teal)' : over ? 'var(--red)' : 'var(--yellow)';
@@ -2904,7 +2960,9 @@ window.renderAdminTasks = async function() {
             ${over ? '<span class="badge" style="background:rgba(255,107,107,.15);color:var(--red);margin-left:6px">逾期</span>' : ''}
           </div>
           <div style="font-size:12px;color:var(--muted);margin-top:4px">
-            派遣 ${target.length} 位老師　${t.dueDate?`截止 ${t.dueDate}　`:''}每人需 ${t.minPhotos||1} 張
+            ${t.targets?.length
+              ? `${new Set(t.targets.map(x=>x.teacherId)).size} 位老師 · ${t.targets.length} 個班級`
+              : `派遣 ${target.length} 位老師`}　${t.dueDate?`截止 ${t.dueDate}　`:''}每班需 ${t.minPhotos||1} 張
           </div>
         </div>
         <div style="display:flex;gap:6px">
@@ -2917,7 +2975,7 @@ window.renderAdminTasks = async function() {
         <div style="flex:1;height:8px;background:var(--surface3);border-radius:20px;overflow:hidden">
           <div style="width:${pct}%;height:100%;background:${barCol};transition:width .3s"></div>
         </div>
-        <div style="font-size:12px;font-weight:700;color:${barCol};min-width:70px;text-align:right">${doneN}/${target.length} 已繳</div>
+        <div style="font-size:12px;font-weight:700;color:${barCol};min-width:78px;text-align:right">${doneN}/${target.length} 班已繳</div>
       </div>
       <div id="taskDetail_${t._id}" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)"></div>
     </div>`;
@@ -2927,14 +2985,52 @@ window.renderAdminTasks = async function() {
 function renderTaskAssigneePicker() {
   const el = document.getElementById('taskAssigneePicker');
   if (!el) return;
-  el.innerHTML = teachers.length
-    ? teachers.map(t => `
-      <label style="display:inline-flex;align-items:center;gap:6px;background:var(--surface3);border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:13px;cursor:pointer;margin:3px">
-        <input type="checkbox" class="taskAssignee" value="${t.userId}" style="accent-color:var(--teal)">
-        ${esc(t.name)}
-      </label>`).join('')
-    : '<div style="font-size:13px;color:var(--muted)">請先新增老師帳號</div>';
+  if (!teachers.length) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--muted)">請先新增老師帳號</div>';
+    return;
+  }
+  const active = allClasses.filter(c => !c.archived);
+  if (!active.length) {
+    el.innerHTML = '<div style="font-size:13px;color:var(--muted)">尚無班級資料，請稍候或按上方「更新」</div>';
+    return;
+  }
+
+  // 依老師分組；找不到對應老師的班級歸到「未指定老師」
+  const html = teachers.map(t => {
+    const mine = active.filter(c => c.teacherId === t.userId);
+    if (!mine.length) return '';
+    return `
+    <div style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span style="font-size:13px;font-weight:700">${esc(t.name)}</span>
+        <button class="btn btn-ghost btn-sm" style="padding:2px 10px;font-size:11px"
+          onclick="toggleTeacherClasses('${esc(t.userId)}')">切換全部</button>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">
+        ${mine.map(c => `
+        <label style="display:inline-flex;align-items:center;gap:6px;background:var(--surface3);border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:13px;cursor:pointer">
+          <input type="checkbox" class="taskAssignee" data-teacher="${esc(t.userId)}"
+            data-tname="${esc(t.name)}" data-cname="${esc(c.name)}" value="${c._id}" style="accent-color:var(--teal)">
+          ${esc(c.name)}
+        </label>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  const orphans = active.filter(c => !teachers.some(t => t.userId === c.teacherId));
+  el.innerHTML = html + (orphans.length ? `
+    <div style="margin-top:6px;padding-top:10px;border-top:1px solid var(--border)">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚠️ 未對應到老師帳號的班級（無法派遣）</div>
+      <div style="font-size:12px;color:var(--muted)">${orphans.map(c=>esc(c.name)).join('、')}</div>
+    </div>` : '');
 }
+
+window.toggleTeacherClasses = function(userId) {
+  const boxes = [...document.querySelectorAll(`.taskAssignee[data-teacher="${userId}"]`)];
+  const allOn = boxes.every(b => b.checked);
+  boxes.forEach(b => b.checked = !allOn);
+};
+
 window.toggleAllAssignees = function(on) {
   document.querySelectorAll('.taskAssignee').forEach(c => c.checked = on);
 };
@@ -2944,15 +3040,23 @@ window.createTask = async function() {
   const desc  = document.getElementById('newTaskDesc').value.trim();
   const due   = document.getElementById('newTaskDue').value;
   const minP  = parseInt(document.getElementById('newTaskMin').value) || 1;
-  const assignees = [...document.querySelectorAll('.taskAssignee:checked')].map(c => c.value);
+  const targets = [...document.querySelectorAll('.taskAssignee:checked')].map(c => ({
+    classId:   c.value,
+    className: c.dataset.cname || '',
+    teacherId: c.dataset.teacher || '',
+    teacherName: c.dataset.tname || ''
+  }));
   if (!title) { showToast('請填寫任務名稱','error'); return; }
-  if (!assignees.length) { showToast('請至少選擇一位老師','error'); return; }
+  if (!targets.length) { showToast('請至少選擇一個班級','error'); return; }
+
+  // assignees 保留為老師清單（去重），供 LINE 通知腳本與舊資料相容使用
+  const assignees = [...new Set(targets.map(t => t.teacherId))];
 
   showLoading('建立任務...');
   try {
     await addDoc(collection(db,'tasks'), {
       title, desc, dueDate:due||'', minPhotos:minP,
-      assignees, status:'open',
+      targets, assignees, status:'open',
       createdBy:'admin', createdAt:Date.now()
     });
     showToast(`✅ 已派遣：${title}`);
@@ -3008,15 +3112,15 @@ window.toggleTaskDetail = async function(taskId) {
   const subs = await loadTaskSubs(taskId);
   if (PHOTO_BACKEND === 'firestore') await loadTaskPhotos(taskId);
 
-  const target  = (t.assignees?.length ? t.assignees : teachers.map(x=>x.userId));
-  const doneSet = new Set(subs.map(s => s.teacherId));
-  const missing = target.filter(id => !doneSet.has(id))
-                        .map(id => teachers.find(x => x.userId===id)?.name || id);
+  const target  = taskTargets(t);
+  const doneSet = new Set(subs.map(s => s.classId ? s.classId : 'T:'+s.teacherId));
+  const missing = target.filter(x => !doneSet.has(x.classId || ('T:'+x.teacherId)))
+                        .map(x => x.className ? `${x.teacherName} · ${x.className}` : x.teacherName);
 
   box.innerHTML = `
     ${missing.length ? `
     <div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.2);border-radius:10px;padding:12px;margin-bottom:12px">
-      <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px">❌ 尚未繳交（${missing.length} 位）</div>
+      <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px">❌ 尚未繳交（${missing.length} 個班級）</div>
       <div>${missing.map(n=>`<span style="display:inline-block;background:rgba(255,107,107,.2);color:var(--red);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px">${esc(n)}</span>`).join('')}</div>
     </div>` : ''}
     ${subs.length ? subs.map(s => {
@@ -3353,13 +3457,14 @@ window.reviewSub = async function(subId, status) {
         </div>
 
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <label class="field-label" style="margin:0">指派給哪些老師</label>
+          <label class="field-label" style="margin:0">指派給哪些班級</label>
           <div style="display:flex;gap:6px">
             <button class="btn btn-ghost btn-sm" onclick="toggleAllAssignees(true)">全選</button>
             <button class="btn btn-ghost btn-sm" onclick="toggleAllAssignees(false)">清除</button>
           </div>
         </div>
-        <div id="taskAssigneePicker" style="margin-bottom:16px;"></div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">同一位老師可只抽查其中幾個班；勾選的每個班級都需要各自繳交。</div>
+        <div id="taskAssigneePicker" style="margin-bottom:16px;max-height:280px;overflow-y:auto;"></div>
 
         <button class="btn btn-teal" style="width:100%;padding:12px;font-size:14px;" onclick="createTask()">🚀 派遣任務</button>
       </div>
