@@ -712,6 +712,7 @@ function renderClassList() {
       <div style="flex:1">
         <div class="class-name">${c.name}</div>
         <div class="class-meta">${c.students.length}人：${c.students.slice(0,5).join('、')}${c.students.length>5?'…':''}</div>
+        ${c.teacherId !== currentUser.id ? '<div style="font-size:11px;color:var(--purple);margin-top:3px">👥 協作班級</div>' : ''}
       </div>
       <div style="display:flex;gap:6px">
         <button class="btn btn-ghost btn-sm" onclick="openClassModal('${c._id}')">✏️ 編輯</button>
@@ -765,6 +766,11 @@ window.saveClass = async function() {
 };
 
 window.deleteClass = async function(id, name) {
+  const cls = myClasses.find(c => c._id === id);
+  if (cls && cls.teacherId !== currentUser.id) {
+    showToast('這是協作班級，只有主要負責老師能刪除','error');
+    return;
+  }
   if (!confirm(`確定刪除班級「${name}」？`)) return;
   showLoading('刪除中...');
   try {
@@ -1447,7 +1453,8 @@ window.adminSwitchTab = function(name, el) {
   if (name==='stats')   adminRenderStats();
   if (name==='accounts') renderTeachers();
   if (name==='student') renderAdminStudentPick();
-  if (name==='schedule') { renderScheduleEditor(); renderClosureAdmin().then(renderScheduleStatusBanner); }
+  if (name==='schedule') { renderScheduleEditor(); renderExportPanel(); renderClosureAdmin().then(renderScheduleStatusBanner); }
+  if (name==='accounts') renderResetPanel().catch(e => console.error('renderResetPanel:', e));
   if (name==='alerts') populateAlertFilters();
   if (name==='classreport') populateClassReportSelect();
   if (name==='promote') renderPromoteTab();
@@ -2140,6 +2147,7 @@ window.saveSchedule = async function() {
     }, { merge:true });
     await loadSchedule();
     renderScheduleEditor();
+    renderExportPanel();
     renderScheduleStatusBanner();
     showToast('💾 課表已儲存');
   } catch(e) { showToast('❌ 儲存失敗：'+e.message,'error'); }
@@ -2782,6 +2790,7 @@ function renderPromoteClassList() {
             </div>` : ''}
           </div>
           ${!isArchived ? `
+            <button onclick="openAdminClassModal('${c._id}')" style="background:rgba(255,255,255,.07);border:1px solid var(--border);border-radius:8px;padding:7px 12px;color:var(--muted);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">✏️ 編輯</button>
             <button onclick="openMemberPanel('${c._id}')" style="background:rgba(123,97,255,.15);border:1px solid rgba(123,97,255,.3);border-radius:8px;padding:7px 12px;color:var(--purple);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">👥 協作</button>
             <button onclick="openPromotePanel('${c._id}')" style="background:linear-gradient(135deg,var(--teal),#2ecc71);border:none;border-radius:8px;padding:7px 14px;color:#0d1117;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">🎓 升班</button>
             <button onclick="archiveClass('${c._id}','${c.name.replace(/'/g,"\\'")}') " style="background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:7px 12px;color:var(--red);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📦 封存</button>
@@ -2980,6 +2989,7 @@ function renderTeachers() {
         <div class="teacher-meta">帳號：${t.userId}　日誌：${allEntries.filter(e=>e.teacherId===t.userId).length} 筆</div>
       </div>
       <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="renameTeacher('${t._id}','${t.userId}','${t.name.replace(/'/g,"\\'")}')">✏️ 改名</button>
         <button class="btn btn-ghost btn-sm" onclick="resetPassword('${t._id}','${t.name}')">🔑 重設密碼</button>
         <button class="btn btn-sm" style="background:rgba(255,107,107,.15);color:var(--red)" onclick="promptDelete('${t._id}','${t.name}')">🗑 刪除</button>
       </div>
@@ -3669,6 +3679,543 @@ window.toggleTaskDetail = async function(taskId) {
 // 注意：Chrome 會阻擋直接開啟 data: URL 的分頁，所以放大一定要用
 // 同頁面的 overlay，不能用 window.open()。
 // ══════════════════════════════════════════════════════════════
+// 🏫 主管端班級管理（新增 / 編輯 / 指派老師）
+// ══════════════════════════════════════════════════════════════
+let adminEditClassId = null;
+
+window.openAdminClassModal = function(classId) {
+  adminEditClassId = classId || null;
+  const cls = classId ? allClasses.find(c => c._id === classId) : null;
+  let panel = document.getElementById('adminClassPanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'adminClassPanel';
+    const anchor = document.getElementById('promoteClassList');
+    anchor.parentNode.insertBefore(panel, anchor);
+  }
+  panel.innerHTML = `
+    <div class="card" style="border:1px solid var(--teal);background:rgba(86,204,178,.06);margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="card-title" style="margin:0">${cls ? '✏️ 編輯班級' : '🏫 新增班級'}</div>
+        <button class="btn btn-ghost btn-sm" onclick="closeAdminClassModal()">✕ 關閉</button>
+      </div>
+
+      <label class="field-label">班級名稱</label>
+      <input class="field-input" id="admClassName" value="${esc(cls?.name||'')}" placeholder="例：國三數學" style="margin-bottom:12px">
+
+      <label class="field-label">主要負責老師</label>
+      <select class="select-input" id="admClassTeacher" style="margin-bottom:12px">
+        ${teachers.map(t => `<option value="${esc(t.userId)}" ${cls?.teacherId===t.userId?'selected':''}>${esc(t.name)}</option>`).join('')}
+      </select>
+
+      <label class="field-label">學生名單（一行一位）</label>
+      <textarea class="field-input" id="admClassStudents" rows="8"
+        placeholder="王小明&#10;李小華&#10;張小美" style="margin-bottom:14px;resize:vertical;line-height:1.8">${esc((cls?.students||[]).join('\\n'))}</textarea>
+
+      <button class="btn btn-teal" style="width:100%;padding:12px" onclick="saveAdminClass()">
+        ${cls ? '💾 儲存變更' : '✅ 建立班級'}
+      </button>
+      ${cls ? '<div style="font-size:12px;color:var(--muted);margin-top:10px">更換主要負責老師不會搬動已填的日誌，歷史紀錄仍保留原本填寫者。</div>' : ''}
+    </div>`;
+  panel.scrollIntoView({behavior:'smooth', block:'center'});
+};
+
+window.closeAdminClassModal = function() {
+  adminEditClassId = null;
+  const p = document.getElementById('adminClassPanel');
+  if (p) p.remove();
+};
+
+window.saveAdminClass = async function() {
+  const name      = document.getElementById('admClassName').value.trim();
+  const teacherId = document.getElementById('admClassTeacher').value;
+  const students  = document.getElementById('admClassStudents').value
+    .split('\n').map(x => x.trim()).filter(Boolean);
+  if (!name)      { showToast('請輸入班級名稱','error'); return; }
+  if (!teacherId) { showToast('請選擇負責老師','error'); return; }
+  if (!students.length) { showToast('請至少輸入一位學生','error'); return; }
+
+  showLoading('儲存中...');
+  try {
+    if (adminEditClassId) {
+      await updateDoc(doc(db,'classes',adminEditClassId), { name, teacherId, students, updatedAt:Date.now() });
+      showToast('💾 班級已更新');
+    } else {
+      await addDoc(collection(db,'classes'), {
+        teacherId, name, students, members:[], memberIds:[], createdAt:Date.now()
+      });
+      showToast('✅ 班級已建立，記得到上方設定周課表');
+    }
+    closeAdminClassModal();
+    const snap = await getDocs(collection(db,'classes'));
+    allClasses = snap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+    renderPromoteClassList();
+  } catch(e) { showToast('❌ 儲存失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+// ══════════════════════════════════════════════════════════════
+// ✏️ 修改老師姓名
+// ══════════════════════════════════════════════════════════════
+window.renameTeacher = async function(docId, userId, oldName) {
+  const name = prompt(`修改老師姓名（帳號 ${userId}）：`, oldName);
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) { showToast('姓名不能空白','error'); return; }
+  if (trimmed === oldName) return;
+
+  if (!confirm(`將「${oldName}」改名為「${trimmed}」？\n\n所有日誌、班級與任務紀錄上的姓名都會一併更新。`)) return;
+
+  showLoading('更新中...');
+  try {
+    await updateDoc(doc(db,'teachers',docId), { name:trimmed, updatedAt:Date.now() });
+
+    // 姓名在多處被反正規化儲存，需要同步更新，否則舊紀錄會顯示舊名字
+    const jobs = [];
+    allEntries.filter(e => e.teacherId === userId && e.teacherName !== trimmed)
+      .forEach(e => jobs.push(updateDoc(doc(db,'entries',e._id), { teacherName:trimmed })));
+
+    const clsSnap = await getDocs(collection(db,'classes'));
+    clsSnap.docs.forEach(d => {
+      const ms = d.data().members || [];
+      if (ms.some(m => m.teacherId === userId && m.teacherName !== trimmed)) {
+        jobs.push(updateDoc(doc(db,'classes',d.id), {
+          members: ms.map(m => m.teacherId === userId ? {...m, teacherName:trimmed} : m)
+        }));
+      }
+    });
+
+    const taskSnap = await getDocs(collection(db,'tasks'));
+    taskSnap.docs.forEach(d => {
+      const tg = d.data().targets || [];
+      if (tg.some(x => x.teacherId === userId && x.teacherName !== trimmed)) {
+        jobs.push(updateDoc(doc(db,'tasks',d.id), {
+          targets: tg.map(x => x.teacherId === userId ? {...x, teacherName:trimmed} : x)
+        }));
+      }
+    });
+
+    const subSnap = await getDocs(query(collection(db,'taskSubs'), where('teacherId','==',userId)));
+    subSnap.docs.forEach(d => jobs.push(updateDoc(doc(db,'taskSubs',d.id), { teacherName:trimmed })));
+
+    await Promise.all(jobs);
+    showToast(`✅ 已改名為 ${trimmed}（同步更新 ${jobs.length} 筆）`);
+    await adminLoadAll();
+    renderTeachers();
+  } catch(e) { showToast('❌ 改名失敗：'+e.message,'error'); console.error(e); }
+  hideLoading();
+};
+
+// ══════════════════════════════════════════════════════════════
+// 📤 課表匯出
+// ══════════════════════════════════════════════════════════════
+function downloadCSV(filename, rows) {
+  const csv = rows.map(r => r.map(v => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+  }).join(',')).join('\r\n');
+  const blob = new Blob(['\ufeff' + csv], { type:'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// 匯出用的課表來源：目前編輯中的那一份
+function exportSourceDays() {
+  return editingDays && Object.keys(editingDays).length
+    ? editingDays
+    : effectiveClassDays(scheduleSets.find(x => x._id === editingSetId));
+}
+function exportSetName() {
+  return scheduleSets.find(x => x._id === editingSetId)?.name || '課表';
+}
+
+window.renderExportPanel = function() {
+  const el = document.getElementById('exportPanel');
+  if (!el) return;
+  const students = [...new Set(allClasses.filter(c=>!c.archived).flatMap(c => c.students||[]))].sort();
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px">
+      <div>
+        <label class="field-label">老師課表</label>
+        <div style="display:flex;gap:6px">
+          <select class="select-input" id="expTeacher" style="margin:0;flex:1">
+            ${teachers.map(t=>`<option value="${esc(t.userId)}">${esc(t.name)}</option>`).join('')}
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="exportSchedule('teacher')">匯出</button>
+        </div>
+      </div>
+      <div>
+        <label class="field-label">學生課表</label>
+        <div style="display:flex;gap:6px">
+          <select class="select-input" id="expStudent" style="margin:0;flex:1">
+            ${students.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('') || '<option value="">尚無學生</option>'}
+          </select>
+          <button class="btn btn-ghost btn-sm" onclick="exportSchedule('student')">匯出</button>
+        </div>
+      </div>
+    </div>
+    <button class="btn btn-purple" style="width:100%;padding:11px" onclick="exportSchedule('all')">📤 匯出全部課表（CSV）</button>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px">
+      匯出的是目前編輯中的「${esc(exportSetName())}」。要匯出其他期間，先在上方切換課表。
+    </div>
+    <div id="exportPreview" style="margin-top:14px"></div>`;
+};
+
+window.exportSchedule = function(mode) {
+  const days     = exportSourceDays();
+  const setName  = exportSetName();
+  const active   = allClasses.filter(c => !c.archived);
+  const nameOfT  = id => teachers.find(t => t.userId === id)?.name || id;
+  const stamp    = todayISO();
+  let rows = [], title = '', preview = [];
+
+  const dayCells = cid => WEEKDAYS_LIST.map(d => (days[cid]||[]).includes(d) ? '●' : '');
+
+  if (mode === 'all') {
+    title = `${setName}｜全部班級`;
+    rows = [[`課表：${setName}`, `匯出日期：${stamp}`], [],
+            ['班級','主要負責老師','協作老師', ...WEEKDAYS_LIST.map(d=>'週'+d), '每週堂數']];
+    active.forEach(c => {
+      const co = (c.members||[]).map(m => m.teacherName).join('、');
+      const cells = dayCells(c._id);
+      rows.push([c.name, nameOfT(c.teacherId), co, ...cells, cells.filter(Boolean).length]);
+      preview.push({ label:c.name, sub:nameOfT(c.teacherId), cells });
+    });
+
+  } else if (mode === 'teacher') {
+    const tid = document.getElementById('expTeacher').value;
+    const tName = nameOfT(tid);
+    title = `${setName}｜${tName}`;
+    const mine = active.filter(c => hasClassAccess(c, tid));
+    rows = [[`課表：${setName}`, `老師：${tName}`, `匯出日期：${stamp}`], [],
+            ['班級','身分', ...WEEKDAYS_LIST.map(d=>'週'+d), '每週堂數']];
+    mine.forEach(c => {
+      const role = c.teacherId===tid ? '主要負責'
+        : ((c.members||[]).find(m=>m.teacherId===tid)?.type === 'sub' ? '職務代理' : '共同授課');
+      const cells = dayCells(c._id);
+      rows.push([c.name, role, ...cells, cells.filter(Boolean).length]);
+      preview.push({ label:c.name, sub:role, cells });
+    });
+    if (!mine.length) { showToast('這位老師沒有班級','error'); return; }
+
+  } else {
+    const stu = document.getElementById('expStudent').value;
+    if (!stu) { showToast('請選擇學生','error'); return; }
+    title = `${setName}｜${stu}`;
+    const mine = active.filter(c => (c.students||[]).includes(stu));
+    rows = [[`課表：${setName}`, `學生：${stu}`, `匯出日期：${stamp}`], [],
+            ['班級','授課老師', ...WEEKDAYS_LIST.map(d=>'週'+d), '每週堂數']];
+    mine.forEach(c => {
+      const who = [nameOfT(c.teacherId), ...(c.members||[]).map(m=>m.teacherName)].join('、');
+      const cells = dayCells(c._id);
+      rows.push([c.name, who, ...cells, cells.filter(Boolean).length]);
+      preview.push({ label:c.name, sub:who, cells });
+    });
+    if (!mine.length) { showToast(`${stu} 沒有在任何班級中`,'error'); return; }
+  }
+
+  // 每週合計
+  rows.push([]);
+  rows.push(['每日班級數','', ...(mode==='all'?['']:[]),
+    ...WEEKDAYS_LIST.map(d => preview.filter(p => p.cells[WEEKDAYS_LIST.indexOf(d)]).length)]);
+
+  downloadCSV(`${title.replace(/[｜\/\\]/g,'_')}_${stamp}.csv`, rows);
+
+  const box = document.getElementById('exportPreview');
+  if (box) box.innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:8px">${esc(title)}　已下載 CSV</div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tr style="color:var(--muted)">
+          <th style="text-align:left;padding:6px 8px;border-bottom:1px solid var(--border)">班級</th>
+          ${WEEKDAYS_LIST.map(d=>`<th style="padding:6px 4px;border-bottom:1px solid var(--border)">${d}</th>`).join('')}
+        </tr>
+        ${preview.map(p => `<tr>
+          <td style="padding:6px 8px;border-bottom:1px solid var(--border)">
+            <span style="font-weight:700">${esc(p.label)}</span>
+            <span style="color:var(--muted);margin-left:6px">${esc(p.sub)}</span>
+          </td>
+          ${p.cells.map(v=>`<td style="text-align:center;padding:6px 4px;border-bottom:1px solid var(--border);color:${v?'var(--teal)':'var(--border)'}">${v||'·'}</td>`).join('')}
+        </tr>`).join('')}
+      </table>
+    </div>`;
+};
+
+// ══════════════════════════════════════════════════════════════
+// ⚠️ 清除資料（重建環境用）
+// ══════════════════════════════════════════════════════════════
+const RESET_TARGETS = {
+  entries:      { label:'所有日誌',       cols:['entries'] },
+  tasks:        { label:'抽查任務與照片', cols:['tasks','taskSubs','taskPhotos'] },
+  closures:     { label:'停課記錄',       cols:['closures'] },
+  schedule:     { label:'所有課表',       cols:['scheduleSets','scheduleConfig','schedule'] },
+  classes:      { label:'所有班級與學生', cols:['classes'] },
+  teachers:     { label:'所有老師帳號',   cols:['teachers'] }
+};
+
+// ══════════════════════════════════════════════════════════════
+// 📦 資料封存（封存並清空 / 檢視 / 還原 / 下載）
+// ══════════════════════════════════════════════════════════════
+// 封存不會刪掉資料，而是先複製到 archives / archiveChunks，
+// 再把原始 collection 清空。之後隨時可以檢視、下載或整批還原。
+//
+//   archives/{batchId}       封存批次的索引（名稱、時間、各項筆數）
+//   archiveChunks/{docId}    實際內容，JSON 字串分段存放
+//
+// Firestore 單筆文件上限 1MB，所以內容依大小切成多段。
+// ──────────────────────────────────────────────────────────────
+
+const ARCHIVE_CHUNK_LIMIT = 800 * 1024;   // 每段的安全上限
+let archives = [];
+
+async function loadArchives() {
+  try {
+    const snap = await getDocs(collection(db,'archives'));
+    archives = snap.docs.map(d => ({_id:d.id, ...d.data()}))
+      .sort((a,b) => (b.createdAt||0)-(a.createdAt||0));
+  } catch(e) { console.error('loadArchives:', e); archives = []; }
+}
+
+// 把一個 collection 的文件切成多段 JSON 字串
+function chunkifyDocs(docs) {
+  const chunks = [];
+  let cur = [], curSize = 0;
+  for (const d of docs) {
+    const item = { _id: d.id, ...d.data() };
+    const size = JSON.stringify(item).length;
+    if (curSize + size > ARCHIVE_CHUNK_LIMIT && cur.length) {
+      chunks.push(cur); cur = []; curSize = 0;
+    }
+    cur.push(item); curSize += size;
+  }
+  if (cur.length) chunks.push(cur);
+  return chunks;
+}
+
+window.renderResetPanel = async function() {
+  const el = document.getElementById('resetPanel');
+  if (!el) return;
+  await loadArchives();
+
+  el.innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+      勾選的資料會先完整複製到封存區，再從系統中清空。之後隨時可以檢視、下載或還原。
+    </div>
+
+    <label class="field-label">封存名稱</label>
+    <input class="field-input" id="archiveName" placeholder="例：114學年上學期" value="${todayISO()} 封存" style="margin-bottom:12px">
+
+    <div style="margin-bottom:14px">
+      ${Object.entries(RESET_TARGETS).map(([k,v]) => `
+        <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--surface3);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:13px;cursor:pointer">
+          <input type="checkbox" class="resetTarget" value="${k}" style="accent-color:var(--yellow)">
+          <span>${v.label}</span>
+          <span style="margin-left:auto;font-size:11px;color:var(--muted)">${v.cols.join(' / ')}</span>
+        </label>`).join('')}
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-purple" style="flex:1;min-width:180px;padding:11px" onclick="runArchive(true)">📦 封存並清空</button>
+      <button class="btn btn-ghost" style="padding:11px 16px" onclick="runArchive(false)">💾 只封存不清空</button>
+    </div>
+
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border)">
+      <div style="font-size:13px;font-weight:700;margin-bottom:10px">📚 封存記錄（${archives.length}）</div>
+      ${archives.length ? archives.map(a => `
+        <div style="background:var(--surface3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+            <div style="flex:1;min-width:180px">
+              <div style="font-size:14px;font-weight:700">${esc(a.name)}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:3px">
+                ${new Date(a.createdAt).toLocaleString('zh-TW')}　共 ${a.totalDocs||0} 筆
+                ${a.cleared ? '' : '　·　未清空'}
+              </div>
+              <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
+                ${Object.entries(a.counts||{}).filter(([,n])=>n>0).map(([col,n]) =>
+                  `<span style="font-size:11px;background:rgba(255,255,255,.07);border-radius:20px;padding:2px 9px;color:var(--muted)">${col} ${n}</span>`).join('')}
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn btn-ghost btn-sm" onclick="downloadArchive('${a._id}')">⬇️ 下載</button>
+              <button class="btn btn-ghost btn-sm" onclick="restoreArchive('${a._id}')">♻️ 還原</button>
+              <button class="btn btn-sm" style="background:rgba(255,107,107,.15);color:var(--red)" onclick="deleteArchive('${a._id}')">🗑</button>
+            </div>
+          </div>
+        </div>`).join('')
+      : '<div style="font-size:13px;color:var(--muted)">尚無封存記錄</div>'}
+    </div>`;
+};
+
+window.runArchive = async function(alsoClear) {
+  const keys = [...document.querySelectorAll('.resetTarget:checked')].map(c => c.value);
+  if (!keys.length) { showToast('請至少勾選一項','error'); return; }
+  const name = document.getElementById('archiveName').value.trim();
+  if (!name) { showToast('請填寫封存名稱','error'); return; }
+
+  const labels = keys.map(k => RESET_TARGETS[k].label);
+  if (alsoClear) {
+    const answer = prompt(
+      `即將封存並從系統清空：\n\n${labels.map(l=>'　· '+l).join('\n')}\n\n` +
+      `資料會完整保留在封存區，可以隨時還原。\n確定的話，請輸入「封存」兩個字：`);
+    if (answer !== '封存') { showToast('已取消'); return; }
+  } else if (!confirm(`封存以下項目（不清空）：\n\n${labels.map(l=>'　· '+l).join('\n')}`)) {
+    return;
+  }
+
+  const cols = [...new Set(keys.flatMap(k => RESET_TARGETS[k].cols))];
+  const batchId = 'ar_' + Date.now();
+  showLoading('封存中...');
+
+  try {
+    const counts = {};
+    let total = 0, seq = 0;
+
+    // ① 複製到封存區
+    for (const col of cols) {
+      const snap = await getDocs(collection(db, col));
+      counts[col] = snap.docs.length;
+      total += snap.docs.length;
+      if (!snap.docs.length) continue;
+
+      const chunks = chunkifyDocs(snap.docs);
+      for (const chunk of chunks) {
+        document.getElementById('loadingText').textContent = `封存 ${col}（${seq+1} 段）...`;
+        await setDoc(doc(db,'archiveChunks', `${batchId}_${String(seq).padStart(4,'0')}`), {
+          batchId, col, seq, count: chunk.length, data: JSON.stringify(chunk)
+        });
+        seq++;
+      }
+    }
+
+    await setDoc(doc(db,'archives', batchId), {
+      name, counts, totalDocs: total, chunkCount: seq,
+      cleared: !!alsoClear, createdAt: Date.now(), createdBy: 'admin'
+    });
+
+    // ② 清空原始資料（封存成功之後才做）
+    if (alsoClear) {
+      let done = 0;
+      for (const col of cols) {
+        const snap = await getDocs(collection(db, col));
+        for (let i = 0; i < snap.docs.length; i += 50) {
+          await Promise.all(snap.docs.slice(i, i+50).map(d => deleteDoc(doc(db, col, d.id))));
+          done += Math.min(50, snap.docs.length - i);
+          document.getElementById('loadingText').textContent = `清空中 ${done}/${total}...`;
+        }
+      }
+      showToast(`📦 已封存 ${total} 筆並清空`);
+      await adminLoadAll();
+      renderTeachers();
+    } else {
+      showToast(`💾 已封存 ${total} 筆（原資料保留）`);
+    }
+
+    await renderResetPanel();
+  } catch(e) {
+    showToast('❌ 封存失敗：'+e.message,'error');
+    console.error(e);
+  }
+  hideLoading();
+};
+
+// 讀出一個封存批次的完整內容 → { collectionName: [docs] }
+async function readArchive(batchId) {
+  const snap = await getDocs(query(collection(db,'archiveChunks'), where('batchId','==',batchId)));
+  const out = {};
+  snap.docs
+    .map(d => d.data())
+    .sort((a,b) => (a.seq||0)-(b.seq||0))
+    .forEach(c => {
+      if (!out[c.col]) out[c.col] = [];
+      try { out[c.col].push(...JSON.parse(c.data)); }
+      catch(e) { console.error('封存段落解析失敗', c.seq, e); }
+    });
+  return out;
+}
+
+window.downloadArchive = async function(batchId) {
+  const a = archives.find(x => x._id === batchId);
+  showLoading('讀取封存...');
+  try {
+    const data = await readArchive(batchId);
+    const payload = {
+      archiveName: a?.name || batchId,
+      createdAt: a?.createdAt,
+      exportedAt: Date.now(),
+      collections: data
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${(a?.name||batchId).replace(/[\/\\:*?"<>|]/g,'_')}.json`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast('⬇️ 已下載');
+  } catch(e) { showToast('❌ 下載失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+window.restoreArchive = async function(batchId) {
+  const a = archives.find(x => x._id === batchId);
+  if (!a) return;
+  const cols = Object.keys(a.counts||{}).filter(c => a.counts[c] > 0);
+  const answer = prompt(
+    `還原封存「${a.name}」\n\n` +
+    `將寫回：${cols.join('、')}\n共 ${a.totalDocs} 筆\n\n` +
+    `⚠️ 相同編號的現有資料會被覆蓋。\n` +
+    `確定的話，請輸入「還原」兩個字：`);
+  if (answer !== '還原') { showToast('已取消'); return; }
+
+  showLoading('還原中...');
+  try {
+    const data = await readArchive(batchId);
+    let done = 0;
+    for (const [col, items] of Object.entries(data)) {
+      for (let i = 0; i < items.length; i += 40) {
+        await Promise.all(items.slice(i, i+40).map(item => {
+          const { _id, ...fields } = item;
+          return setDoc(doc(db, col, _id), fields);
+        }));
+        done += Math.min(40, items.length - i);
+        document.getElementById('loadingText').textContent = `還原中 ${done}/${a.totalDocs}...`;
+      }
+    }
+    await updateDoc(doc(db,'archives',batchId), { cleared:false, restoredAt:Date.now() });
+    showToast(`♻️ 已還原 ${done} 筆`);
+    await adminLoadAll();
+    renderTeachers();
+    await renderResetPanel();
+  } catch(e) { showToast('❌ 還原失敗：'+e.message,'error'); console.error(e); }
+  hideLoading();
+};
+
+window.deleteArchive = async function(batchId) {
+  const a = archives.find(x => x._id === batchId);
+  if (!a) return;
+  const answer = prompt(
+    `永久刪除封存「${a.name}」（${a.totalDocs} 筆）？\n\n` +
+    `這次是真的刪除，無法還原。建議先按「下載」留一份 JSON。\n` +
+    `確定的話，請輸入「永久刪除」：`);
+  if (answer !== '永久刪除') { showToast('已取消'); return; }
+
+  showLoading('刪除中...');
+  try {
+    const snap = await getDocs(query(collection(db,'archiveChunks'), where('batchId','==',batchId)));
+    for (let i = 0; i < snap.docs.length; i += 50) {
+      await Promise.all(snap.docs.slice(i, i+50).map(d => deleteDoc(doc(db,'archiveChunks',d.id))));
+    }
+    await deleteDoc(doc(db,'archives',batchId));
+    showToast('🗑 封存已刪除');
+    await renderResetPanel();
+  } catch(e) { showToast('❌ 刪除失敗：'+e.message,'error'); }
+  hideLoading();
+};
+
+// ══════════════════════════════════════════════════════════════
 // 🚫 停課登記 (CLASS CLOSURES)
 // ══════════════════════════════════════════════════════════════
 // closures 文件格式：
@@ -4192,6 +4739,13 @@ window.reviewSub = async function(subId, status) {
         <div id="scheduleEditor"></div>
       </div>
 
+      <!-- Export -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px;">
+        <div style="font-size:15px;font-weight:700;margin-bottom:6px;">📤 課表匯出</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">下載 CSV 檔，可直接用 Excel 或 Google 試算表開啟。</div>
+        <div id="exportPanel"></div>
+      </div>
+
       <!-- Closures -->
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:16px;">
         <div style="font-size:15px;font-weight:700;margin-bottom:6px;">🚫 停課管理</div>
@@ -4266,7 +4820,10 @@ window.reviewSub = async function(subId, status) {
 
       <!-- 班級列表 -->
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px;">
-        <div style="font-size:15px;font-weight:700;margin-bottom:14px;">📋 目前所有班級</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <div style="font-size:15px;font-weight:700;">📋 目前所有班級</div>
+          <button class="btn btn-teal btn-sm" onclick="openAdminClassModal()">🏫 新增班級</button>
+        </div>
         <div id="promoteClassList"></div>
       </div>
 
@@ -4370,6 +4927,13 @@ window.reviewSub = async function(subId, status) {
       </div>
       <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:12px;">👥 目前老師帳號（<span id="teacherCount">0</span> 位）</div>
       <div id="teacherList"></div>
+
+      <!-- Danger zone -->
+      <div style="background:var(--surface);border:1px solid rgba(255,209,102,.3);border-left:3px solid var(--yellow);border-radius:var(--radius);padding:18px;margin-top:24px;">
+        <div style="font-size:15px;font-weight:700;color:var(--yellow);margin-bottom:6px;">📦 資料封存</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">學期結束或重建環境時使用。舊資料會完整保留在封存區，隨時可以查詢或還原。</div>
+        <div id="resetPanel"></div>
+      </div>
     </div>
   </div>
 </div>
