@@ -604,8 +604,8 @@ window.login = async function() {
       document.getElementById('teacherBadge').textContent = t.name;
       const k = localStorage.getItem('openaiKey');
       if (k) document.getElementById('apiKey').value = k;
-      loadClasses();
-      loadEntries();
+      // loadEntries 需要 myClasses 才知道要撈哪些共同班級，必須依序執行
+      loadClasses().then(loadEntries);
     } else {
       document.getElementById('loginError').style.display = 'block';
     }
@@ -642,10 +642,32 @@ window.switchTab = function(name, el) {
 };
 
 // ── CLASS MANAGEMENT ──
+// 某位老師今天對這個班級是否有存取權
+// 主導老師永遠有；共同授課無期限；職務代理只在起訖日之間有效
+function hasClassAccess(cls, userId, iso) {
+  if (cls.teacherId === userId) return true;
+  const m = (cls.members || []).find(x => x.teacherId === userId);
+  if (!m) return false;
+  if (m.type !== 'sub') return true;
+  const d = iso || todayISO();
+  return (!m.from || m.from <= d) && (!m.to || d <= m.to);
+}
+
 async function loadClasses() {
   try {
-    const snap = await getDocs(query(collection(db,'classes'), where('teacherId','==',currentUser.id)));
-    myClasses = snap.docs.map(d => ({_id:d.id,...d.data()})).filter(c=>!c.archived).sort((a,b) => (a.createdAt||0)-(b.createdAt||0));
+    // 兩個查詢：我主導的 + 我是成員的（Firestore 沒有 OR，只能分開撈再合併）
+    const [ownSnap, memberSnap] = await Promise.all([
+      getDocs(query(collection(db,'classes'), where('teacherId','==',currentUser.id))),
+      getDocs(query(collection(db,'classes'), where('memberIds','array-contains',currentUser.id)))
+        .catch(() => ({ docs: [] }))
+    ]);
+    const byId = {};
+    [...ownSnap.docs, ...memberSnap.docs].forEach(d => { byId[d.id] = {_id:d.id, ...d.data()}; });
+
+    myClasses = Object.values(byId)
+      .filter(c => !c.archived)
+      .filter(c => hasClassAccess(c, currentUser.id))
+      .sort((a,b) => (a.createdAt||0)-(b.createdAt||0));
     refreshClassSelect();
   } catch(e) { console.error('loadClasses:', e); }
 }
@@ -975,8 +997,19 @@ window.saveEntry = async function() {
   showLoading('儲存至雲端...');
   try {
     const existing = entries.find(e => e.date===date && e.classId===clsId);
-    if (existing?._id) await updateDoc(doc(db,'entries',existing._id), entry);
-    else await addDoc(collection(db,'entries'), entry);
+    if (existing?._id) {
+      // 共用日誌：保留原始填寫者，另外記錄最後編輯者，避免歸屬被協作老師覆蓋
+      const patch = { ...entry };
+      if (existing.teacherId && existing.teacherId !== currentUser.id) {
+        patch.teacherId      = existing.teacherId;
+        patch.teacherName    = existing.teacherName;
+        patch.lastEditedBy   = currentUser.id;
+        patch.lastEditedName = currentUser.name;
+      }
+      await updateDoc(doc(db,'entries',existing._id), patch);
+    } else {
+      await addDoc(collection(db,'entries'), entry);
+    }
     showToast('☁️ 已儲存至雲端！');
     document.getElementById('journalClassSelect').value = '';
     _lastSelectedClassId = null;
@@ -990,8 +1023,24 @@ window.saveEntry = async function() {
 // ── LOAD ENTRIES ──
 async function loadEntries() {
   try {
-    const snap = await getDocs(query(collection(db,'entries'), where('teacherId','==',currentUser.id)));
-    entries = snap.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
+    const byId = {};
+    // 自己寫的日誌
+    const mine = await getDocs(query(collection(db,'entries'), where('teacherId','==',currentUser.id)));
+    mine.docs.forEach(d => { byId[d.id] = {_id:d.id, ...d.data()}; });
+
+    // 共同負責班級中，其他老師寫的日誌（一天一筆、兩人共用）
+    const sharedIds = myClasses
+      .filter(c => c.teacherId !== currentUser.id || (c.memberIds||[]).length)
+      .map(c => c._id);
+    // Firestore 的 in 查詢一次最多 30 個值，分批送
+    for (let i = 0; i < sharedIds.length; i += 30) {
+      const batch = sharedIds.slice(i, i + 30);
+      if (!batch.length) continue;
+      const snap = await getDocs(query(collection(db,'entries'), where('classId','in',batch)));
+      snap.docs.forEach(d => { byId[d.id] = {_id:d.id, ...d.data()}; });
+    }
+
+    entries = Object.values(byId).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
   } catch(e) { console.error('loadEntries:', e); }
 }
 
@@ -1016,6 +1065,10 @@ function renderHistory() {
           <span class="entry-date">${e.date}</span>
           <span style="font-size:12px;color:var(--muted);margin-left:8px">星期${e.weekday}</span><br>
           <span style="font-size:13px;color:var(--purple);font-weight:700">${e.className||''}</span>
+          ${e.teacherId && e.teacherId !== currentUser.id
+            ? `<span style="font-size:11px;color:var(--muted);margin-left:6px">· ${esc(e.teacherName||'')} 填寫</span>` : ''}
+          ${e.lastEditedBy && e.lastEditedBy !== e.teacherId
+            ? `<span style="font-size:11px;color:var(--muted);margin-left:4px">（${esc(e.lastEditedName||'')} 修改）</span>` : ''}
         </div>
         <div class="entry-badges">
           ${absentCount?`<span class="ebadge ebadge-red">曠課${absentCount}</span>`:''}
@@ -1368,6 +1421,8 @@ async function adminLoadAll() {
   showLoading('載入資料...');
   try { const s=await getDocs(collection(db,'entries')); allEntries=s.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(b.savedAt||0)-(a.savedAt||0)); } catch(e) { console.error(e); allEntries=[]; }
   try { const s=await getDocs(collection(db,'teachers')); teachers=s.docs.map(d=>({_id:d.id,...d.data()})); } catch(e) { console.error(e); teachers=[]; }
+  // 提醒邏輯需要班級成員資料（共同授課／職務代理）
+  try { const s=await getDocs(collection(db,'classes')); allClasses=s.docs.map(d=>({_id:d.id,...d.data()})).sort((a,b)=>(a.name||'').localeCompare(b.name||'')); } catch(e) { console.error(e); }
   await loadSchedule();
   hideLoading();
   adminRenderOverview(); adminPopulateFilters(); renderAdminStudentPick();
@@ -1821,7 +1876,8 @@ window.exportAlertCSV = function() {
 };
 // ── SCHEDULE ──
 const WEEKDAYS_LIST = ['一','二','三','四','五','六','日'];
-let schedule       = {};   // 目前生效課表的 { teacherId: ['一','三','五'] }
+let schedule           = {};   // 舊格式 { teacherId: [...] }，保留相容
+let scheduleClassDays  = {};   // 目前生效課表 { classId: ['一','三','五'] }
 let scheduleSets   = [];   // 所有課表版本
 let editingSetId   = null; // 編輯中的課表版本
 let editingDays    = {};   // 編輯中的排課（未儲存）
@@ -1843,6 +1899,19 @@ function resolveScheduleSet(iso) {
     .sort((a,b) => (b.startDate||'').localeCompare(a.startDate||''));
   if (dated.length) return dated[0];
   return scheduleSets.find(x => !x.startDate && !x.endDate) || null;
+}
+
+// 取得課表的班級排課表。舊課表只有老師層級，先用「主導老師的上課日」推導成
+// 該老師每個班的排課，主管再進去逐班修掉不上課的日子。
+function effectiveClassDays(set) {
+  if (!set) return {};
+  if (set.classDays) return { ...set.classDays };
+  const out = {};
+  allClasses.filter(c => !c.archived).forEach(c => {
+    const d = (set.days || {})[c.teacherId] || [];
+    if (d.length) out[c._id] = [...d];
+  });
+  return out;
 }
 
 async function loadSchedule() {
@@ -1870,12 +1939,13 @@ async function loadSchedule() {
     }
 
     const act = resolveScheduleSet(todayISO());
-    activeSetId = act?._id || null;
-    schedule    = act?.days ? {...act.days} : {};
+    activeSetId  = act?._id || null;
+    schedule     = act?.days ? {...act.days} : {};          // 舊的老師層級，僅供相容
+    scheduleClassDays = effectiveClassDays(act);            // 新的班級層級
 
     if (editingSetId && !scheduleSets.some(x => x._id === editingSetId)) editingSetId = null;
     if (!editingSetId) editingSetId = activeSetId || scheduleSets[0]?._id || null;
-    editingDays = { ...(scheduleSets.find(x => x._id === editingSetId)?.days || {}) };
+    editingDays = { ...effectiveClassDays(scheduleSets.find(x => x._id === editingSetId)) };
   } catch(e) { console.error('loadSchedule:', e); }
 }
 
@@ -1946,39 +2016,66 @@ function renderScheduleEditor() {
     el.innerHTML = '<div style="color:var(--muted);font-size:13px">請先在「帳號管理」新增老師帳號</div>';
     return;
   }
-  el.innerHTML = teachers.map(t => {
-    const days = editingDays[t.userId] || [];
-    return `<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;">
-      <div style="min-width:90px;font-size:14px;font-weight:700">${t.name}</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        ${WEEKDAYS_LIST.map(d => {
-          const active = days.includes(d);
-          return `<button onclick="toggleScheduleDay('${t.userId}','${d}')" id="sched_${t.userId}_${d}"
-            style="${active
-              ? 'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;border:none;'
-              : 'background:var(--surface3);color:var(--muted);border:1px solid var(--border);'}
-              border-radius:8px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;min-width:42px;">
-            週${d}
-          </button>`;
-        }).join('')}
-      </div>
+  const active = allClasses.filter(c => !c.archived);
+  if (!active.length) {
+    el.innerHTML = '<div style="color:var(--muted);font-size:13px">尚無班級資料</div>';
+    return;
+  }
+
+  const dayBtns = (cid, days) => WEEKDAYS_LIST.map(d => {
+    const on = days.includes(d);
+    return `<button onclick="toggleScheduleDay('${cid}','${d}')" id="sched_${cid}_${d}"
+      style="${on
+        ? 'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;border:none;'
+        : 'background:var(--surface3);color:var(--muted);border:1px solid var(--border);'}
+        border-radius:8px;padding:6px 11px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;min-width:40px;">
+      ${d}
+    </button>`;
+  }).join('');
+
+  const html = teachers.map(t => {
+    const mine = active.filter(c => c.teacherId === t.userId);
+    if (!mine.length) return '';
+    return `
+    <div style="margin-bottom:18px">
+      <div style="font-size:12px;font-weight:700;color:var(--muted);letter-spacing:1px;margin-bottom:8px">👤 ${esc(t.name)}</div>
+      ${mine.map(c => {
+        const days = editingDays[c._id] || [];
+        const co = (c.members||[]).map(m => m.teacherName);
+        return `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
+          <div style="min-width:130px">
+            <div style="font-size:14px;font-weight:700">${esc(c.name)}</div>
+            ${co.length ? `<div style="font-size:11px;color:var(--purple)">👥 ${co.map(esc).join('、')}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap">${dayBtns(c._id, days)}</div>
+        </div>`;
+      }).join('')}
     </div>`;
   }).join('');
+
+  const orphans = active.filter(c => !teachers.some(t => t.userId === c.teacherId));
+  el.innerHTML = html + (orphans.length ? `
+    <div style="margin-top:8px;padding-top:12px;border-top:1px solid var(--border)">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">⚠️ 未對應到老師帳號的班級</div>
+      ${orphans.map(c => `<div style="display:flex;align-items:center;gap:12px;padding:10px 0;flex-wrap:wrap">
+        <div style="min-width:130px;font-size:14px;font-weight:700">${esc(c.name)}</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">${dayBtns(c._id, editingDays[c._id]||[])}</div>
+      </div>`).join('')}
+    </div>` : '');
 }
 
-window.toggleScheduleDay = function(userId, day) {
-  if (!editingDays[userId]) editingDays[userId] = [];
-  const idx = editingDays[userId].indexOf(day);
-  if (idx >= 0) editingDays[userId].splice(idx, 1);
-  else editingDays[userId].push(day);
-  // Update button style immediately
-  const btn = document.getElementById(`sched_${userId}_${day}`);
+window.toggleScheduleDay = function(classId, day) {
+  if (!editingDays[classId]) editingDays[classId] = [];
+  const idx = editingDays[classId].indexOf(day);
+  if (idx >= 0) editingDays[classId].splice(idx, 1);
+  else editingDays[classId].push(day);
+  const btn = document.getElementById(`sched_${classId}_${day}`);
   if (btn) {
-    const active = editingDays[userId].includes(day);
+    const active = editingDays[classId].includes(day);
     btn.style.cssText = (active
       ? 'background:linear-gradient(135deg,var(--teal),#2ecc71);color:#0d1117;border:none;'
       : 'background:var(--surface3);color:var(--muted);border:1px solid var(--border);')
-      + 'border-radius:8px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;min-width:42px;';
+      + 'border-radius:8px;padding:6px 11px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;min-width:40px;';
   }
 };
 
@@ -1990,17 +2087,17 @@ window.saveSchedule = async function() {
   if (!name) { showToast('請填寫課表名稱','error'); return; }
   if (start && end && start > end) { showToast('起日不能晚於迄日','error'); return; }
 
-  // 只保留還存在的老師，並清掉空陣列
-  const days = {};
-  teachers.forEach(t => {
-    const d = editingDays[t.userId] || [];
-    if (d.length) days[t.userId] = d;
+  // 只保留還存在的班級，並清掉空陣列
+  const classDays = {};
+  allClasses.filter(c => !c.archived).forEach(c => {
+    const d = editingDays[c._id] || [];
+    if (d.length) classDays[c._id] = d;
   });
 
   showLoading('儲存課表...');
   try {
     await setDoc(doc(db,'scheduleSets',editingSetId), {
-      name, startDate:start, endDate:end, days, updatedAt:Date.now()
+      name, startDate:start, endDate:end, classDays, updatedAt:Date.now()
     }, { merge:true });
     await loadSchedule();
     renderScheduleEditor();
@@ -2011,13 +2108,13 @@ window.saveSchedule = async function() {
 };
 
 window.switchEditingSet = function(id) {
-  const dirty = JSON.stringify(editingDays) !== JSON.stringify(scheduleSets.find(x=>x._id===editingSetId)?.days||{});
+  const dirty = JSON.stringify(editingDays) !== JSON.stringify(effectiveClassDays(scheduleSets.find(x=>x._id===editingSetId)));
   if (dirty && !confirm('這份課表有未儲存的變更，切換後會遺失。確定要切換嗎？')) {
     document.getElementById('scheduleSetSel').value = editingSetId;
     return;
   }
   editingSetId = id;
-  editingDays  = { ...(scheduleSets.find(x => x._id === id)?.days || {}) };
+  editingDays  = effectiveClassDays(scheduleSets.find(x => x._id === id));
   renderScheduleEditor();
 };
 
@@ -2109,27 +2206,29 @@ function renderScheduleStatusBanner() {
   const dd      = String(now.getDate()).padStart(2,'0');
   const todayStr= `${mm}/${dd}`;
 
-  // Teachers scheduled today
-  const scheduledToday = teachers.filter(t => (schedule[t.userId]||[]).includes(todayWD));
+  // 今天有排課的班級
+  const nameOfT = id => teachers.find(t => t.userId === id)?.name || id;
+  const scheduledToday = allClasses.filter(c =>
+    !c.archived && (scheduleClassDays[c._id]||[]).includes(todayWD));
   if (!scheduledToday.length) {
-    banner.innerHTML = `<div style="background:rgba(86,204,178,.08);border:1px solid rgba(86,204,178,.2);border-radius:12px;padding:14px;font-size:13px;color:var(--muted)">今天（週${todayWD}）沒有排課</div>`;
+    banner.innerHTML = `<div style="background:rgba(86,204,178,.08);border:1px solid rgba(86,204,178,.2);border-radius:12px;padding:14px;font-size:13px;color:var(--muted)">今天（週${todayWD}）沒有班級排課</div>`;
     return;
   }
 
-  // Check who filed today
-  const filedToday = new Set(
-    allEntries.filter(e => entryDateToMMDD(e.date) === todayStr).map(e => e.teacherId)
-  );
-  const filed   = scheduledToday.filter(t => filedToday.has(t.userId));
-  const missing = scheduledToday.filter(t => !filedToday.has(t.userId));
+  // 今天已經有日誌的班級（任何一位負責老師填的都算）
+  const classesFiledToday = new Set(
+    allEntries.filter(e => entryDateToMMDD(e.date) === todayStr).map(e => e.classId).filter(Boolean));
+
+  const filed   = scheduledToday.filter(c =>  classesFiledToday.has(c._id));
+  const missing = scheduledToday.filter(c => !classesFiledToday.has(c._id));
 
   banner.innerHTML = `
     <div style="background:${missing.length?'rgba(255,107,107,.08)':'rgba(86,204,178,.08)'};border:1px solid ${missing.length?'rgba(255,107,107,.25)':'rgba(86,204,178,.25)'};border-radius:12px;padding:16px;">
       <div style="font-size:14px;font-weight:700;color:${missing.length?'var(--red)':'var(--teal)'};margin-bottom:10px;">
-        ${missing.length ? `⚠️ 今天（週${todayWD} ${todayStr}）有 ${missing.length} 位老師尚未填寫日誌` : `✅ 今天（週${todayWD} ${todayStr}）所有老師都已填寫日誌`}
+        ${missing.length ? `⚠️ 今天（週${todayWD} ${todayStr}）有 ${missing.length} 個班級尚未填寫日誌` : `✅ 今天（週${todayWD} ${todayStr}）排課的 ${filed.length} 個班級都已填寫`}
       </div>
-      ${missing.length ? `<div style="margin-bottom:8px"><span style="font-size:12px;color:var(--muted)">未填寫：</span>${missing.map(t=>`<span style="display:inline-block;background:rgba(255,107,107,.2);color:var(--red);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px">${t.name}</span>`).join('')}</div>` : ''}
-      ${filed.length ? `<div><span style="font-size:12px;color:var(--muted)">已填寫：</span>${filed.map(t=>`<span style="display:inline-block;background:rgba(86,204,178,.2);color:var(--teal);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px">${t.name}</span>`).join('')}</div>` : ''}
+      ${missing.length ? `<div style="margin-bottom:8px"><span style="font-size:12px;color:var(--muted)">未填寫：</span>${missing.map(c=>`<span style="display:inline-block;background:rgba(255,107,107,.2);color:var(--red);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px">${esc(c.name)}<span style="opacity:.7;font-weight:400">（${esc(nameOfT(c.teacherId))}）</span></span>`).join('')}</div>` : ''}
+      ${filed.length ? `<div><span style="font-size:12px;color:var(--muted)">已填寫：</span>${filed.map(c=>`<span style="display:inline-block;background:rgba(86,204,178,.2);color:var(--teal);border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700;margin:2px">${esc(c.name)}</span>`).join('')}</div>` : ''}
     </div>`;
 }
 
@@ -2142,36 +2241,34 @@ window.checkMissingLogs = function() {
   const dayIdx  = new Date(dateVal).getDay(); // 0=Sun
   const weekday = WEEKDAYS_LIST[dayIdx===0 ? 6 : dayIdx-1];
 
-  const setForDay = resolveScheduleSet(dateVal);
-  const daysForDay = setForDay?.days || {};
-  const scheduledOnDay = teachers.filter(t => (daysForDay[t.userId]||[]).includes(weekday));
-  const filedOnDay     = new Set(allEntries.filter(e => entryDateToMMDD(e.date)===mmdd).map(e=>e.teacherId));
+  const setForDay  = resolveScheduleSet(dateVal);
+  const daysForDay = effectiveClassDays(setForDay);
+  const nameOfT2   = id => teachers.find(t => t.userId === id)?.name || id;
 
-  const filed   = scheduledOnDay.filter(t => filedOnDay.has(t.userId));
-  const missing = scheduledOnDay.filter(t => !filedOnDay.has(t.userId));
-  const noClass = teachers.filter(t => !(daysForDay[t.userId]||[]).includes(weekday));
+  const scheduledOnDay = allClasses.filter(c => !c.archived && (daysForDay[c._id]||[]).includes(weekday));
+  const classesFiledOnDay = new Set(
+    allEntries.filter(e => entryDateToMMDD(e.date) === mmdd).map(e => e.classId).filter(Boolean));
+
+  const filed   = scheduledOnDay.filter(c =>  classesFiledOnDay.has(c._id));
+  const missing = scheduledOnDay.filter(c => !classesFiledOnDay.has(c._id));
+  const chip = (c, bg, fg, withTeacher) => `<span style="display:inline-block;background:${bg};color:${fg};border-radius:20px;padding:4px 12px;font-size:13px;font-weight:700;margin:3px">${esc(c.name)}${withTeacher?`<span style="opacity:.7;font-weight:400">（${esc(nameOfT2(c.teacherId))}）</span>`:''}</span>`;
 
   const el = document.getElementById('missingLogsResult');
   if (!scheduledOnDay.length) {
-    el.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:12px 0">${dateVal}（週${weekday}）沒有老師排課</div>`;
+    el.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:12px 0">${dateVal}（週${weekday}）沒有班級排課</div>`;
     return;
   }
   el.innerHTML = `
-    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">${dateVal}（週${weekday}）排課 ${scheduledOnDay.length} 位老師　<span style="opacity:.7">課表：${esc(setForDay?.name||'未設定')}</span></div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">${dateVal}（週${weekday}）排課 ${scheduledOnDay.length} 個班級　<span style="opacity:.7">課表：${esc(setForDay?.name||'未設定')}</span></div>
     ${missing.length ? `
     <div style="background:rgba(255,107,107,.08);border:1px solid rgba(255,107,107,.2);border-radius:10px;padding:14px;margin-bottom:10px;">
-      <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px;">❌ 尚未填寫（${missing.length} 位）</div>
-      <div>${missing.map(t=>`<span style="display:inline-block;background:rgba(255,107,107,.2);color:var(--red);border-radius:20px;padding:4px 12px;font-size:13px;font-weight:700;margin:3px">${t.name}</span>`).join('')}</div>
+      <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px;">❌ 尚未填寫（${missing.length} 個班級）</div>
+      <div>${missing.map(c=>chip(c,'rgba(255,107,107,.2)','var(--red)',true)).join('')}</div>
     </div>` : ''}
     ${filed.length ? `
-    <div style="background:rgba(86,204,178,.08);border:1px solid rgba(86,204,178,.2);border-radius:10px;padding:14px;margin-bottom:10px;">
-      <div style="font-size:13px;font-weight:700;color:var(--teal);margin-bottom:8px;">✅ 已填寫（${filed.length} 位）</div>
-      <div>${filed.map(t=>`<span style="display:inline-block;background:rgba(86,204,178,.2);color:var(--teal);border-radius:20px;padding:4px 12px;font-size:13px;font-weight:700;margin:3px">${t.name}</span>`).join('')}</div>
-    </div>` : ''}
-    ${noClass.length ? `
-    <div style="background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px;padding:14px;">
-      <div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:8px;">📵 當天無課（${noClass.length} 位）</div>
-      <div>${noClass.map(t=>`<span style="display:inline-block;background:rgba(255,255,255,.07);color:var(--muted);border-radius:20px;padding:4px 12px;font-size:13px;margin:3px">${t.name}</span>`).join('')}</div>
+    <div style="background:rgba(86,204,178,.08);border:1px solid rgba(86,204,178,.2);border-radius:10px;padding:14px;">
+      <div style="font-size:13px;font-weight:700;color:var(--teal);margin-bottom:8px;">✅ 已填寫（${filed.length} 個班級）</div>
+      <div>${filed.map(c=>chip(c,'rgba(86,204,178,.2)','var(--teal)',true)).join('')}</div>
     </div>` : ''}`;
 };
 
@@ -2450,6 +2547,132 @@ async function renderPromoteTab() {
   document.getElementById('promotePanel').style.display='none';
 }
 
+// ══════════════════════════════════════════════════════════════
+// 👥 班級協作老師（共同授課 / 職務代理）
+// ══════════════════════════════════════════════════════════════
+let memberPanelClassId = null;
+
+window.openMemberPanel = function(classId) {
+  memberPanelClassId = classId;
+  const cls = allClasses.find(c => c._id === classId);
+  if (!cls) return;
+  const owner = teachers.find(t => t.userId === cls.teacherId);
+  const members = cls.members || [];
+  const available = teachers.filter(t =>
+    t.userId !== cls.teacherId && !members.some(m => m.teacherId === t.userId));
+
+  let panel = document.getElementById('memberPanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'memberPanel';
+    document.getElementById('promoteClassList').parentNode.insertBefore(panel, document.getElementById('promoteClassList'));
+  }
+  panel.innerHTML = `
+    <div class="card" style="border:1px solid var(--purple);background:rgba(123,97,255,.06);margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div class="card-title" style="margin:0">👥 ${esc(cls.name)} — 協作老師</div>
+        <button class="btn btn-ghost btn-sm" onclick="closeMemberPanel()">✕ 關閉</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
+        主要負責：<strong style="color:var(--text)">${esc(owner?.name || cls.teacherId)}</strong>　
+        協作老師可以填寫、編輯這個班的日誌，並上傳作業抽查照片。
+      </div>
+
+      ${members.length ? `<div style="margin-bottom:14px">
+        ${members.map((m,i) => {
+          const on = m.type!=='sub' || ((!m.from||m.from<=todayISO()) && (!m.to||todayISO()<=m.to));
+          return `<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface3);border:1px solid var(--border);border-radius:10px;margin-bottom:6px;opacity:${on?1:.5}">
+            <div style="flex:1">
+              <span style="font-size:14px;font-weight:700">${esc(m.teacherName)}</span>
+              <span style="font-size:11px;font-weight:700;border-radius:20px;padding:2px 9px;margin-left:8px;background:${m.type==='sub'?'rgba(255,209,102,.15);color:var(--yellow)':'rgba(123,97,255,.15);color:var(--purple)'}">
+                ${m.type==='sub' ? '🔄 職務代理' : '👥 共同授課'}
+              </span>
+              ${m.type==='sub' ? `<div style="font-size:12px;color:var(--muted);margin-top:3px">
+                ${m.from||'不限'} ～ ${m.to||'不限'}${on?'':'　·　已失效'}
+              </div>` : ''}
+            </div>
+            <button class="btn btn-sm" style="background:rgba(255,107,107,.15);color:var(--red)" onclick="removeMember(${i})">移除</button>
+          </div>`;
+        }).join('')}
+      </div>` : '<div style="font-size:13px;color:var(--muted);margin-bottom:14px">目前沒有協作老師</div>'}
+
+      ${available.length ? `
+      <div style="padding-top:14px;border-top:1px solid var(--border)">
+        <label class="field-label">新增協作老師</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <select class="select-input" id="memberTeacherSel" style="margin:0">
+            ${available.map(t => `<option value="${esc(t.userId)}" data-name="${esc(t.name)}">${esc(t.name)}</option>`).join('')}
+          </select>
+          <select class="select-input" id="memberTypeSel" onchange="toggleMemberDates()" style="margin:0">
+            <option value="co">👥 共同授課（無期限）</option>
+            <option value="sub">🔄 職務代理（限期間）</option>
+          </select>
+        </div>
+        <div id="memberDateRow" style="display:none;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div><label class="field-label">代理起日</label><input type="date" class="field-input" id="memberFrom" style="margin:0"></div>
+          <div><label class="field-label">代理迄日</label><input type="date" class="field-input" id="memberTo" style="margin:0"></div>
+        </div>
+        <button class="btn btn-purple" style="width:100%;padding:11px" onclick="addMember()">➕ 加入</button>
+      </div>` : '<div style="font-size:12px;color:var(--muted)">沒有其他老師可以加入</div>'}
+    </div>`;
+  panel.scrollIntoView({behavior:'smooth', block:'center'});
+};
+
+window.closeMemberPanel = function() {
+  memberPanelClassId = null;
+  const p = document.getElementById('memberPanel');
+  if (p) p.remove();
+};
+
+window.toggleMemberDates = function() {
+  const isSub = document.getElementById('memberTypeSel').value === 'sub';
+  document.getElementById('memberDateRow').style.display = isSub ? 'grid' : 'none';
+};
+
+async function saveMembers(members) {
+  const cls = allClasses.find(c => c._id === memberPanelClassId);
+  if (!cls) return;
+  showLoading('儲存中...');
+  try {
+    // memberIds 是給 Firestore array-contains 查詢用的扁平索引
+    await updateDoc(doc(db,'classes',cls._id), {
+      members,
+      memberIds: members.map(m => m.teacherId),
+      updatedAt: Date.now()
+    });
+    cls.members   = members;
+    cls.memberIds = members.map(m => m.teacherId);
+    renderPromoteClassList();
+    openMemberPanel(cls._id);
+    showToast('💾 已更新協作老師');
+  } catch(e) { showToast('❌ 儲存失敗：'+e.message,'error'); }
+  hideLoading();
+}
+
+window.addMember = function() {
+  const sel  = document.getElementById('memberTeacherSel');
+  const type = document.getElementById('memberTypeSel').value;
+  const opt  = sel.selectedOptions[0];
+  if (!opt) return;
+  const from = type==='sub' ? document.getElementById('memberFrom').value : '';
+  const to   = type==='sub' ? document.getElementById('memberTo').value   : '';
+  if (type==='sub' && !to) { showToast('職務代理請至少填寫迄日','error'); return; }
+  if (from && to && from > to) { showToast('起日不能晚於迄日','error'); return; }
+
+  const cls = allClasses.find(c => c._id === memberPanelClassId);
+  saveMembers([...(cls.members||[]), {
+    teacherId: opt.value, teacherName: opt.dataset.name, type, from, to, addedAt: Date.now()
+  }]);
+};
+
+window.removeMember = function(idx) {
+  const cls = allClasses.find(c => c._id === memberPanelClassId);
+  const m = (cls.members||[])[idx];
+  if (!m) return;
+  if (!confirm(`確定將 ${m.teacherName} 從「${cls.name}」移除？\n他將無法再存取這個班級的日誌。`)) return;
+  saveMembers((cls.members||[]).filter((_,i) => i !== idx));
+};
+
 function renderPromoteClassList() {
   const el = document.getElementById('promoteClassList');
   if (!allClasses.length) { el.innerHTML='<div style="color:var(--muted);font-size:13px">尚無班級資料</div>'; return; }
@@ -2472,8 +2695,18 @@ function renderPromoteClassList() {
             <span style="font-size:14px;font-weight:700">${c.name}</span>
             ${isArchived?'<span style="margin-left:8px;font-size:11px;background:rgba(255,255,255,.1);border-radius:10px;padding:2px 8px;color:var(--muted)">已封存</span>':''}
             <div style="font-size:12px;color:var(--muted);margin-top:2px">${(c.students||[]).length}人：${(c.students||[]).slice(0,4).join('、')}${(c.students||[]).length>4?'…':''}</div>
+            ${(c.members||[]).length ? `<div style="margin-top:5px;display:flex;flex-wrap:wrap;gap:4px">
+              ${c.members.map(m => {
+                const on = m.type!=='sub' || ((!m.from||m.from<=todayISO()) && (!m.to||todayISO()<=m.to));
+                const col = m.type==='sub' ? 'var(--yellow)' : 'var(--purple)';
+                return `<span style="font-size:11px;font-weight:700;border-radius:20px;padding:2px 9px;background:${col}1f;color:${col};opacity:${on?1:.4}">
+                  ${m.type==='sub'?'🔄':'👥'} ${esc(m.teacherName)}${m.type==='sub'&&m.to?`（至 ${m.to}）`:''}${on?'':'　已失效'}
+                </span>`;
+              }).join('')}
+            </div>` : ''}
           </div>
           ${!isArchived ? `
+            <button onclick="openMemberPanel('${c._id}')" style="background:rgba(123,97,255,.15);border:1px solid rgba(123,97,255,.3);border-radius:8px;padding:7px 12px;color:var(--purple);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">👥 協作</button>
             <button onclick="openPromotePanel('${c._id}')" style="background:linear-gradient(135deg,var(--teal),#2ecc71);border:none;border-radius:8px;padding:7px 14px;color:#0d1117;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">🎓 升班</button>
             <button onclick="archiveClass('${c._id}','${c.name.replace(/'/g,"\\'")}') " style="background:rgba(255,107,107,.15);border:1px solid rgba(255,107,107,.3);border-radius:8px;padding:7px 12px;color:var(--red);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">📦 封存</button>
           ` : `
@@ -3202,7 +3435,8 @@ function renderTaskAssigneePicker() {
 
   // 依老師分組；找不到對應老師的班級歸到「未指定老師」
   const html = teachers.map(t => {
-    const mine = active.filter(c => c.teacherId === t.userId);
+    // 主導的班級 + 有權限協作的班級都可以被指派
+    const mine = active.filter(c => hasClassAccess(c, t.userId));
     if (!mine.length) return '';
     return `
     <div style="margin-bottom:10px">
@@ -3216,13 +3450,13 @@ function renderTaskAssigneePicker() {
         <label style="display:inline-flex;align-items:center;gap:6px;background:var(--surface3);border:1px solid var(--border);border-radius:20px;padding:6px 12px;font-size:13px;cursor:pointer">
           <input type="checkbox" class="taskAssignee" data-teacher="${esc(t.userId)}"
             data-tname="${esc(t.name)}" data-cname="${esc(c.name)}" value="${c._id}" style="accent-color:var(--teal)">
-          ${esc(c.name)}
+          ${esc(c.name)}${c.teacherId !== t.userId ? '<span style="opacity:.6;font-size:11px">（協作）</span>' : ''}
         </label>`).join('')}
       </div>
     </div>`;
   }).join('');
 
-  const orphans = active.filter(c => !teachers.some(t => t.userId === c.teacherId));
+  const orphans = active.filter(c => !teachers.some(t => hasClassAccess(c, t.userId)));
   el.innerHTML = html + (orphans.length ? `
     <div style="margin-top:6px;padding-top:10px;border-top:1px solid var(--border)">
       <div style="font-size:12px;color:var(--muted);margin-bottom:6px">⚠️ 未對應到老師帳號的班級（無法派遣）</div>
@@ -3619,7 +3853,7 @@ window.reviewSub = async function(subId, status) {
           <div style="font-size:15px;font-weight:700;">📅 設定周課表</div>
           <button class="btn btn-teal btn-sm" onclick="saveSchedule()">💾 儲存課表</button>
         </div>
-        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">設定每位老師每週固定上課的日期。可建立多份課表（例如常態、寒假、暑假），系統會依今天的日期自動套用對應那份。</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">逐班設定每週固定上課的日期。可建立多份課表（例如常態、寒假、暑假），系統會依今天的日期自動套用對應那份。系統會在當天檢查每個有排課的班級是否已填日誌。</div>
         <div id="scheduleSetBar"></div>
         <div id="scheduleEditor"></div>
       </div>
